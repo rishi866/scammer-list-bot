@@ -119,8 +119,9 @@ async def add_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 def build_add_handler() -> ConversationHandler:
+    """Multi-step /add for admins in PRIVATE chat (direct DB insert, no approval)."""
     return ConversationHandler(
-        entry_points=[CommandHandler("add", add_start)],
+        entry_points=[CommandHandler("add", add_start, filters=filters.ChatType.PRIVATE)],
         states={
             ADD_TARGET: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_target)],
             ADD_NAME:   [MessageHandler(filters.TEXT & ~filters.COMMAND, add_name)],
@@ -222,7 +223,7 @@ async def approve_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     scammer_id = await add_scammer(
         telegram_id=report.get("target_id"),
         username=report.get("target_username"),
-        name=report.get("target_username") or str(report.get("target_id") or "Unknown"),
+        name=report.get("target_full_name") or report.get("target_username") or str(report.get("target_id") or "Unknown"),
         reason=report["reason"],
         proof=report.get("proof"),
         added_by=update.effective_user.id,

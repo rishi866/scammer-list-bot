@@ -81,19 +81,23 @@ async def init_db() -> None:
                 reporter_username TEXT,
                 target_id         BIGINT,
                 target_username   TEXT,
+                target_full_name  TEXT,
                 reason            TEXT NOT NULL,
                 proof             TEXT,
+                group_chat_id     BIGINT,
                 status            TEXT NOT NULL DEFAULT 'pending',
                 reported_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
             );
         """)
-        # Migrate existing tables that were created before these columns existed
-        for col, definition in [
-            ("username_history",    "TEXT[] DEFAULT '{}'"),
-            ("last_username_check", "TIMESTAMPTZ"),
+        # Idempotent migrations for columns added after initial deploy
+        for tbl, col, definition in [
+            ("scammers", "username_history",    "TEXT[] DEFAULT '{}'"),
+            ("scammers", "last_username_check", "TIMESTAMPTZ"),
+            ("reports",  "target_full_name",    "TEXT"),
+            ("reports",  "group_chat_id",       "BIGINT"),
         ]:
             await conn.execute(
-                f"ALTER TABLE scammers ADD COLUMN IF NOT EXISTS {col} {definition};"
+                f"ALTER TABLE {tbl} ADD COLUMN IF NOT EXISTS {col} {definition};"
             )
     logger.info("Schema ready")
 
@@ -166,16 +170,20 @@ async def add_report(
     reporter_username: Optional[str],
     target_id: Optional[int],
     target_username: Optional[str],
+    target_full_name: Optional[str] = None,
     reason: str,
     proof: Optional[str],
+    group_chat_id: Optional[int] = None,
 ) -> int:
     pool = await _get_pool()
     row = await pool.fetchrow(
         """INSERT INTO reports
-           (reporter_id, reporter_username, target_id, target_username, reason, proof)
-           VALUES ($1, $2, $3, $4, $5, $6)
+           (reporter_id, reporter_username, target_id, target_username,
+            target_full_name, reason, proof, group_chat_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
            RETURNING id""",
-        reporter_id, reporter_username, target_id, target_username, reason, proof,
+        reporter_id, reporter_username, target_id, target_username,
+        target_full_name, reason, proof, group_chat_id,
     )
     return row["id"]
 

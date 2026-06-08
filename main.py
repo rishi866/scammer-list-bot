@@ -14,16 +14,18 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-from telegram import BotCommand, BotCommandScopeAllPrivateChats
-from telegram.ext import Application, CommandHandler, filters
+from telegram import BotCommand, BotCommandScopeAllPrivateChats, BotCommandScopeAllGroupChats
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, filters
 from telegram.request import HTTPXRequest
 
 from bot.db import init_db
-from bot.handlers.start import start_command, help_command
-from bot.handlers.check import check_command
-from bot.services.username_refresher import username_refresh_loop
-from bot.handlers.report import build_report_handler
-from bot.handlers.admin import (
+from bot.handlers.start        import start_command, help_command
+from bot.handlers.check        import check_command
+from bot.handlers.group_add    import group_add_command
+from bot.handlers.scammer_list import scammer_list_command
+from bot.handlers.report       import build_report_handler
+from bot.handlers.callbacks    import callback_router
+from bot.handlers.admin        import (
     build_add_handler,
     remove_command,
     list_command,
@@ -32,6 +34,7 @@ from bot.handlers.admin import (
     reject_command,
     stats_command,
 )
+from bot.services.username_refresher import username_refresh_loop
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 
@@ -46,14 +49,25 @@ async def run() -> None:
     req = HTTPXRequest(connect_timeout=10, read_timeout=15, write_timeout=20, pool_timeout=15)
     app = Application.builder().token(BOT_TOKEN).request(req).build()
 
-    # Public
-    app.add_handler(CommandHandler("start",  start_command))
-    app.add_handler(CommandHandler("help",   help_command))
-    app.add_handler(CommandHandler("check",  check_command))
+    # ── Handlers ──────────────────────────────────────────────────────────────
+
+    # Public (group + private)
+    app.add_handler(CommandHandler("start",        start_command))
+    app.add_handler(CommandHandler("help",         help_command))
+    app.add_handler(CommandHandler("check",        check_command))
+    app.add_handler(CommandHandler("scammer_list", scammer_list_command))
+
+    # /add in GROUP → submission flow (goes to admin for approval)
+    app.add_handler(CommandHandler("add", group_add_command, filters=filters.ChatType.GROUPS))
+
+    # /report in PRIVATE → multi-step report (also goes to approval)
     app.add_handler(build_report_handler())
 
-    # Admin
-    app.add_handler(build_add_handler())
+    # Inline button callbacks (approve/reject submissions + scammer_list pagination)
+    app.add_handler(CallbackQueryHandler(callback_router))
+
+    # Admin commands (private chat only)
+    app.add_handler(build_add_handler())   # multi-step /add in private → direct DB insert
     app.add_handler(CommandHandler("remove",  remove_command))
     app.add_handler(CommandHandler("list",    list_command))
     app.add_handler(CommandHandler("pending", pending_command))
@@ -61,23 +75,32 @@ async def run() -> None:
     app.add_handler(CommandHandler("reject",  reject_command))
     app.add_handler(CommandHandler("stats",   stats_command))
 
-    cmds = [
-        BotCommand("start",  "Welcome"),
-        BotCommand("check",  "Check if someone is a scammer"),
-        BotCommand("report", "Report a scammer"),
-        BotCommand("help",   "Show help"),
+    # ── Bot command menus ──────────────────────────────────────────────────────
+    group_cmds = [
+        BotCommand("add",          "Submit a scammer for admin review"),
+        BotCommand("check",        "Check if someone is a known scammer"),
+        BotCommand("scammer_list", "View all confirmed scammers"),
     ]
+    private_cmds = [
+        BotCommand("start",        "Welcome"),
+        BotCommand("check",        "Check if someone is a scammer"),
+        BotCommand("scammer_list", "View all confirmed scammers"),
+        BotCommand("report",       "Report a suspected scammer"),
+        BotCommand("help",         "Show help"),
+    ]
+
     await app.initialize()
     await app.start()
     try:
-        await app.bot.set_my_commands(cmds)
-        await app.bot.set_my_commands(cmds, scope=BotCommandScopeAllPrivateChats())
+        await app.bot.set_my_commands(group_cmds,   scope=BotCommandScopeAllGroupChats())
+        await app.bot.set_my_commands(private_cmds, scope=BotCommandScopeAllPrivateChats())
     except Exception as e:
         logger.warning("set_my_commands failed: %s", e)
 
     await app.updater.start_polling(drop_pending_updates=True)
     logger.info("Scammer List Bot is live.")
 
+    # Background: auto-refresh scammer usernames every 6 hours
     refresh_task = asyncio.create_task(
         username_refresh_loop(app.bot), name="username-refresh"
     )
