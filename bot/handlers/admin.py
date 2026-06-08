@@ -35,7 +35,7 @@ def admin_only(func: Callable):
     @wraps(func)
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if update.effective_user.id not in _get_admin_ids():
-            await update.message.reply_text(em("⛔ Admins only."))
+            await update.message.reply_text(em("⛔ Admins only."), parse_mode="HTML")
             return ConversationHandler.END
         return await func(update, context)
     return wrapper
@@ -121,7 +121,7 @@ async def add_notes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 async def add_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.clear()
-    await update.message.reply_text(em("❌ Cancelled."))
+    await update.message.reply_text(em("❌ Cancelled."), parse_mode="HTML")
     return ConversationHandler.END
 
 
@@ -151,9 +151,9 @@ async def remove_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     sid = int(args[0])
     ok  = await remove_scammer(sid)
     if ok:
-        await update.message.reply_text(em(f"✅ Scammer #{sid} removed."))
+        await update.message.reply_text(em(f"✅ Scammer #{sid} removed."), parse_mode="HTML")
     else:
-        await update.message.reply_text(em(f"❌ No entry with ID #{sid}."))
+        await update.message.reply_text(em(f"❌ No entry with ID #{sid}."), parse_mode="HTML")
 
 
 # ── /list ─────────────────────────────────────────────────────────────────────
@@ -169,7 +169,7 @@ async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     total    = await count_scammers()
 
     if not entries:
-        await update.message.reply_text(em("📋 No scammers in the list yet."))
+        await update.message.reply_text(em("📋 No scammers in the list yet."), parse_mode="HTML")
         return
 
     lines = []
@@ -192,7 +192,7 @@ async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 async def pending_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     reports = await list_pending_reports()
     if not reports:
-        await update.message.reply_text(em("✅ No pending reports."))
+        await update.message.reply_text(em("✅ No pending reports."), parse_mode="HTML")
         return
 
     lines = []
@@ -224,10 +224,10 @@ async def approve_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     rid    = int(args[0])
     report = await get_report(rid)
     if not report:
-        await update.message.reply_text(em(f"❌ Report #{rid} not found."))
+        await update.message.reply_text(em(f"❌ Report #{rid} not found."), parse_mode="HTML")
         return
     if report["status"] != "pending":
-        await update.message.reply_text(em(f"⚠️ Report #{rid} is already {report['status']}."))
+        await update.message.reply_text(em(f"⚠️ Report #{rid} is already {report['status']}."), parse_mode="HTML")
         return
 
     scammer_id = await add_scammer(
@@ -254,10 +254,10 @@ async def reject_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     rid    = int(args[0])
     report = await get_report(rid)
     if not report:
-        await update.message.reply_text(em(f"❌ Report #{rid} not found."))
+        await update.message.reply_text(em(f"❌ Report #{rid} not found."), parse_mode="HTML")
         return
     await update_report_status(rid, "rejected")
-    await update.message.reply_text(em(f"❌ Report #{rid} rejected."))
+    await update.message.reply_text(em(f"❌ Report #{rid} rejected."), parse_mode="HTML")
 
 
 # ── /stats ────────────────────────────────────────────────────────────────────

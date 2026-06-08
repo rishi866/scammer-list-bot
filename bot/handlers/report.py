@@ -110,7 +110,7 @@ async def report_proof(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 
 async def report_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.clear()
-    await update.message.reply_text(em("❌ Report cancelled."), reply_markup=ReplyKeyboardRemove())
+    await update.message.reply_text(em("❌ Report cancelled."), parse_mode="HTML", reply_markup=ReplyKeyboardRemove())
     return ConversationHandler.END
 
 

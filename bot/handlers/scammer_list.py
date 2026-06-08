@@ -49,7 +49,7 @@ async def scammer_list_command(update: Update, context: ContextTypes.DEFAULT_TYP
 
     total = await count_scammers()
     if total == 0:
-        await update.message.reply_text(em("📋 No confirmed scammers in the list yet."))
+        await update.message.reply_text(em("📋 No confirmed scammers in the list yet."), parse_mode="HTML")
         return
 
     total_pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)

@@ -48,7 +48,8 @@ async def group_add_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if not args:
         await msg.reply_text(
             em("📝 Usage: /add @username [reason]\n"
-               "Tip: Reply to a photo with /add @username reason to include proof.")
+               "Tip: Reply to a photo with /add @username reason to include proof."),
+            parse_mode="HTML",
         )
         return
 
@@ -181,5 +182,6 @@ async def group_add_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     proof_note = " (with photo proof)" if proof_file_id else ""
     await msg.reply_text(
         em(f"✅ Submission #{report_id} sent to admins for review{proof_note}. Thank you!"),
+        parse_mode="HTML",
         reply_to_message_id=msg.message_id,
     )

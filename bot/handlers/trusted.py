@@ -28,7 +28,7 @@ def admin_only(func):
     @wraps(func)
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if update.effective_user.id not in _admin_ids():
-            await update.message.reply_text(em("⛔ Admins only."))
+            await update.message.reply_text(em("⛔ Admins only."), parse_mode="HTML")
             return
         return await func(update, context)
     return wrapper
@@ -94,14 +94,14 @@ async def removetrusted_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     await remove_trusted_reporter(match["user_id"])
     uname = f"@{match['username']}" if match.get("username") else str(match["user_id"])
-    await update.message.reply_text(em(f"✅ Removed trusted status from {uname}."))
+    await update.message.reply_text(em(f"✅ Removed trusted status from {uname}."), parse_mode="HTML")
 
 
 @admin_only
 async def listtrusted_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     reporters = await list_trusted_reporters()
     if not reporters:
-        await update.message.reply_text(em("📋 No trusted reporters yet.\nUse /addtrusted @username."))
+        await update.message.reply_text(em("📋 No trusted reporters yet.\nUse /addtrusted @username."), parse_mode="HTML")
         return
 
     lines = []
