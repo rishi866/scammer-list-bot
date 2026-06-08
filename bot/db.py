@@ -88,7 +88,7 @@ async def init_db() -> None:
                 status            TEXT NOT NULL DEFAULT 'pending',
                 reported_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
             );
-        """)
+
             CREATE TABLE IF NOT EXISTS custom_emojis (
                 id         BIGSERIAL PRIMARY KEY,
                 fallback   TEXT NOT NULL UNIQUE,
