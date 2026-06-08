@@ -116,6 +116,52 @@ async def listemoji_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 @admin_only
+async def extractmoji_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Extract custom emoji IDs from a message with animated emojis.
+
+    Usage:
+      1. Send a message containing the animated emojis you want to map.
+      2. Reply to that message with /extractmoji
+      OR just send /extractmoji and include animated emojis in the same message.
+    """
+    # Check the replied-to message first, then the command message itself
+    target = update.message.reply_to_message or update.message
+    entities = list(target.entities or []) + list(target.caption_entities or [])
+    text = target.text or target.caption or ""
+
+    saved_pairs = []
+    for entity in entities:
+        if entity.type == "custom_emoji":
+            emoji_char = text[entity.offset: entity.offset + entity.length]
+            custom_id  = str(entity.custom_emoji_id)
+            if emoji_char and custom_id:
+                await upsert_custom_emoji(fallback=emoji_char, custom_id=custom_id)
+                saved_pairs.append((emoji_char, custom_id))
+
+    if not saved_pairs:
+        await update.message.reply_text(
+            "❌ No animated emojis found in that message.\n\n"
+            "How to use:\n"
+            "1️⃣ Open your emoji keyboard (Premium)\n"
+            "2️⃣ Send a message with animated emojis like ✨ 🔍 📋 📨 🟡 🟢 🚨 🏆\n"
+            "3️⃣ Reply to that message with /extractmoji"
+        )
+        return
+
+    await emoji_fx.reload()
+
+    preview = "  ".join(
+        f'<tg-emoji emoji-id="{cid}">{fb}</tg-emoji>' for fb, cid in saved_pairs
+    )
+    await update.message.reply_text(
+        f"✅ <b>Saved {len(saved_pairs)} animated emoji(s)!</b>\n\n"
+        f"Preview: {preview}\n\n"
+        f"These will now animate in all bot messages.",
+        parse_mode="HTML",
+    )
+
+
+@admin_only
 async def loadpack_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Usage: /loadpack <sticker_pack_name>
     Fetches the pack from Telegram and imports all custom emoji IDs.

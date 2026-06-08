@@ -29,7 +29,7 @@ from bot.handlers.group_add    import group_add_command
 from bot.handlers.scammer_list import scammer_list_command
 from bot.handlers.report       import build_report_handler
 from bot.handlers.callbacks    import callback_router
-from bot.handlers.emoji_admin  import setemoji_cmd, delemoji_cmd, listemoji_cmd, loadpack_cmd
+from bot.handlers.emoji_admin  import setemoji_cmd, delemoji_cmd, listemoji_cmd, loadpack_cmd, extractmoji_cmd
 from bot.handlers.trusted      import addtrusted_cmd, removetrusted_cmd, listtrusted_cmd
 from bot.handlers.new_member   import on_new_member
 from bot.handlers.admin        import (
@@ -92,10 +92,11 @@ async def run() -> None:
     app.add_handler(CommandHandler("listtrusted",   listtrusted_cmd))
 
     # ── Emoji admin commands ───────────────────────────────────────────────────
-    app.add_handler(CommandHandler("setemoji",  setemoji_cmd))
-    app.add_handler(CommandHandler("delemoji",  delemoji_cmd))
-    app.add_handler(CommandHandler("listemoji", listemoji_cmd))
-    app.add_handler(CommandHandler("loadpack",  loadpack_cmd))
+    app.add_handler(CommandHandler("setemoji",    setemoji_cmd))
+    app.add_handler(CommandHandler("delemoji",    delemoji_cmd))
+    app.add_handler(CommandHandler("listemoji",   listemoji_cmd))
+    app.add_handler(CommandHandler("loadpack",    loadpack_cmd))
+    app.add_handler(CommandHandler("extractmoji", extractmoji_cmd))
 
     # ── Group membership tracking ─────────────────────────────────────────────
     # Track which groups the bot is in (for cross-group broadcast)
