@@ -87,20 +87,32 @@ async def listemoji_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await update.message.reply_text("No emoji mappings configured yet.\nUse /setemoji or /loadpack.")
         return
 
-    lines = []
-    for it in items:
+    # Bot ke specific emojis check karo
+    BOT_EMOJIS = ["✨","🔍","📝","📋","📨","ℹ️","✅","❌","⚠️","🔴","🟡","🟢",
+                  "👤","🔑","🔄","📅","🔗","📌","📤","📊","🚨","🛡","🏆","🎉"]
+    mapped_set = {it.get("fallback","") for it in items}
+
+    found   = [e for e in BOT_EMOJIS if e in mapped_set]
+    missing = [e for e in BOT_EMOJIS if e not in mapped_set]
+
+    status = (
+        f"<b>📊 Emoji Mappings: {len(items)} total</b>\n\n"
+        f"✅ Bot emojis mapped ({len(found)}): {' '.join(found) or '—'}\n"
+        f"❌ Bot emojis missing ({len(missing)}): {' '.join(missing) or '—'}\n\n"
+    )
+
+    # Show first 30 only to avoid message length limit
+    preview_lines = []
+    for it in items[:30]:
         fb  = it.get("fallback", "?")
         cid = it.get("custom_id", "?")
-        kw  = it.get("keyword") or ""
-        lines.append(
-            f'<tg-emoji emoji-id="{cid}">{fb}</tg-emoji> {fb} → <code>{cid}</code>'
-            + (f"  [{kw}]" if kw else "")
-        )
+        preview_lines.append(f'<tg-emoji emoji-id="{cid}">{fb}</tg-emoji> {fb}')
 
-    await update.message.reply_text(
-        f"<b>Emoji Mappings ({len(items)})</b>\n\n" + "\n".join(lines),
-        parse_mode="HTML",
-    )
+    status += "<b>Preview (first 30):</b>\n" + "  ".join(preview_lines)
+    if len(items) > 30:
+        status += f"\n\n…and {len(items) - 30} more"
+
+    await update.message.reply_text(status, parse_mode="HTML")
 
 
 @admin_only
