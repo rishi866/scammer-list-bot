@@ -40,6 +40,7 @@ from bot.handlers.admin        import (
     approve_command,
     reject_command,
     stats_command,
+    fixids_command,
 )
 from bot.services.username_refresher import username_refresh_loop
 from bot.services.broadcaster        import on_bot_member_update
@@ -87,6 +88,7 @@ async def run() -> None:
     app.add_handler(CommandHandler("approve",       approve_command))
     app.add_handler(CommandHandler("reject",        reject_command))
     app.add_handler(CommandHandler("stats",         stats_command))
+    app.add_handler(CommandHandler("fixids",        fixids_command))
     app.add_handler(CommandHandler("addtrusted",    addtrusted_cmd))
     app.add_handler(CommandHandler("removetrusted", removetrusted_cmd))
     app.add_handler(CommandHandler("listtrusted",   listtrusted_cmd))

@@ -9,6 +9,8 @@ from typing import Callable
 from telegram import Update
 from telegram.ext import ContextTypes, ConversationHandler, CommandHandler, MessageHandler, filters
 
+from telegram.error import TelegramError
+
 from bot.db import (
     add_scammer,
     remove_scammer,
@@ -19,6 +21,8 @@ from bot.db import (
     get_report,
     update_report_status,
     count_reports,
+    get_scammers_missing_id,
+    update_scammer_telegram_id,
 )
 from bot.services.emoji_fx import em
 
@@ -313,6 +317,60 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             f"📨 Reports pending : <b>{pending}</b>\n"
             f"✅ Reports approved: <b>{approved}</b>\n"
             f"❌ Reports rejected: <b>{rejected}</b>"
+        ),
+        parse_mode="HTML",
+    )
+
+
+# ── /fixids ───────────────────────────────────────────────────────────────────
+
+@admin_only
+async def fixids_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Resolve Telegram IDs for all scammers that were added by username only."""
+    scammers = await get_scammers_missing_id(batch=200)
+
+    if not scammers:
+        await update.message.reply_text(
+            em("✅ All scammers already have Telegram IDs!"),
+            parse_mode="HTML",
+        )
+        return
+
+    await update.message.reply_text(
+        em(f"🔄 Found <b>{len(scammers)}</b> scammers without Telegram ID.\nResolving, please wait..."),
+        parse_mode="HTML",
+    )
+
+    fixed   = 0
+    failed  = 0
+    details = []
+
+    for s in scammers:
+        uname = s.get("username")
+        if not uname:
+            failed += 1
+            continue
+        try:
+            import asyncio
+            await asyncio.sleep(0.5)   # rate-limit safety
+            chat = await context.bot.get_chat(f"@{uname}")
+            await update_scammer_telegram_id(s["id"], chat.id, chat.username)
+            details.append(f"✅ #{s['id']} @{uname} → ID <code>{chat.id}</code>")
+            fixed += 1
+        except TelegramError as e:
+            details.append(f"❌ #{s['id']} @{uname} — {e}")
+            failed += 1
+
+    summary = "\n".join(details[:30])  # max 30 lines to avoid message too long
+    if len(details) > 30:
+        summary += f"\n...and {len(details) - 30} more"
+
+    await update.message.reply_text(
+        em(
+            f"✅ <b>Fix IDs complete!</b>\n\n"
+            f"  Fixed  : <b>{fixed}</b>\n"
+            f"  Failed : <b>{failed}</b>\n\n"
+            f"{summary}"
         ),
         parse_mode="HTML",
     )

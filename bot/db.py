@@ -313,6 +313,32 @@ async def delete_custom_emoji(fallback: str) -> bool:
 
 # ── Username refresh ───────────────────────────────────────────────────────────
 
+async def get_scammers_missing_id(batch: int = 200) -> list[dict]:
+    """Return scammers that have a username but no telegram_id yet."""
+    pool = await _get_pool()
+    return _rows(await pool.fetch(
+        """SELECT * FROM scammers
+           WHERE telegram_id IS NULL
+             AND username IS NOT NULL
+           ORDER BY id ASC
+           LIMIT $1""",
+        batch,
+    ))
+
+
+async def update_scammer_telegram_id(scammer_id: int, telegram_id: int, username: Optional[str]) -> None:
+    """Set telegram_id for a scammer that was added without one."""
+    pool = await _get_pool()
+    await pool.execute(
+        """UPDATE scammers
+           SET telegram_id = $1,
+               username    = COALESCE($2, username),
+               last_username_check = NOW()
+           WHERE id = $3""",
+        telegram_id, username, scammer_id,
+    )
+
+
 async def get_scammers_needing_refresh(stale_hours: int = 6, batch: int = 100) -> list[dict]:
     pool = await _get_pool()
     return _rows(await pool.fetch(
