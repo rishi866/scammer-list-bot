@@ -15,7 +15,10 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 from telegram import BotCommand, BotCommandScopeAllPrivateChats, BotCommandScopeAllGroupChats
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, filters
+from telegram.ext import (
+    Application, CommandHandler, CallbackQueryHandler,
+    ChatMemberHandler, filters,
+)
 from telegram.request import HTTPXRequest
 
 from bot.db import init_db
@@ -27,6 +30,8 @@ from bot.handlers.scammer_list import scammer_list_command
 from bot.handlers.report       import build_report_handler
 from bot.handlers.callbacks    import callback_router
 from bot.handlers.emoji_admin  import setemoji_cmd, delemoji_cmd, listemoji_cmd, loadpack_cmd
+from bot.handlers.trusted      import addtrusted_cmd, removetrusted_cmd, listtrusted_cmd
+from bot.handlers.new_member   import on_new_member
 from bot.handlers.admin        import (
     build_add_handler,
     remove_command,
@@ -37,6 +42,8 @@ from bot.handlers.admin        import (
     stats_command,
 )
 from bot.services.username_refresher import username_refresh_loop
+from bot.services.broadcaster        import on_bot_member_update
+from bot.services.weekly_digest      import weekly_digest_loop
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 
@@ -48,7 +55,6 @@ async def run() -> None:
 
     await init_db()
 
-    # Load animated emoji mappings from DB
     try:
         await emoji_fx.load()
         logger.info("emoji_fx ready")
@@ -70,23 +76,33 @@ async def run() -> None:
     # /report in private → multi-step (goes to approval)
     app.add_handler(build_report_handler())
 
-    # Inline button callbacks (approve/reject + scammer_list pagination)
+    # Inline button callbacks (approve/reject/severity + scammer_list pagination)
     app.add_handler(CallbackQueryHandler(callback_router))
 
     # ── Admin-only (private chat) ─────────────────────────────────────────────
     app.add_handler(build_add_handler())   # multi-step /add in PM → direct DB insert
-    app.add_handler(CommandHandler("remove",    remove_command))
-    app.add_handler(CommandHandler("list",      list_command))
-    app.add_handler(CommandHandler("pending",   pending_command))
-    app.add_handler(CommandHandler("approve",   approve_command))
-    app.add_handler(CommandHandler("reject",    reject_command))
-    app.add_handler(CommandHandler("stats",     stats_command))
+    app.add_handler(CommandHandler("remove",        remove_command))
+    app.add_handler(CommandHandler("list",          list_command))
+    app.add_handler(CommandHandler("pending",       pending_command))
+    app.add_handler(CommandHandler("approve",       approve_command))
+    app.add_handler(CommandHandler("reject",        reject_command))
+    app.add_handler(CommandHandler("stats",         stats_command))
+    app.add_handler(CommandHandler("addtrusted",    addtrusted_cmd))
+    app.add_handler(CommandHandler("removetrusted", removetrusted_cmd))
+    app.add_handler(CommandHandler("listtrusted",   listtrusted_cmd))
 
     # ── Emoji admin commands ───────────────────────────────────────────────────
     app.add_handler(CommandHandler("setemoji",  setemoji_cmd))
     app.add_handler(CommandHandler("delemoji",  delemoji_cmd))
     app.add_handler(CommandHandler("listemoji", listemoji_cmd))
     app.add_handler(CommandHandler("loadpack",  loadpack_cmd))
+
+    # ── Group membership tracking ─────────────────────────────────────────────
+    # Track which groups the bot is in (for cross-group broadcast)
+    app.add_handler(ChatMemberHandler(on_bot_member_update, ChatMemberHandler.MY_CHAT_MEMBER))
+
+    # Auto-check new members against scammer list
+    app.add_handler(ChatMemberHandler(on_new_member, ChatMemberHandler.CHAT_MEMBER))
 
     # ── Bot command menus ─────────────────────────────────────────────────────
     group_cmds = [
@@ -95,11 +111,14 @@ async def run() -> None:
         BotCommand("scammer_list", "View all confirmed scammers"),
     ]
     private_cmds = [
-        BotCommand("start",        "Welcome"),
-        BotCommand("check",        "Check if someone is a scammer"),
-        BotCommand("scammer_list", "View all confirmed scammers"),
-        BotCommand("report",       "Report a suspected scammer"),
-        BotCommand("help",         "Show help"),
+        BotCommand("start",         "Welcome"),
+        BotCommand("check",         "Check if someone is a scammer"),
+        BotCommand("scammer_list",  "View all confirmed scammers"),
+        BotCommand("report",        "Report a suspected scammer"),
+        BotCommand("help",          "Show help"),
+        BotCommand("addtrusted",    "Add trusted reporter (admin)"),
+        BotCommand("removetrusted", "Remove trusted reporter (admin)"),
+        BotCommand("listtrusted",   "List trusted reporters (admin)"),
     ]
 
     await app.initialize()
@@ -110,24 +129,24 @@ async def run() -> None:
     except Exception as e:
         logger.warning("set_my_commands failed: %s", e)
 
-    await app.updater.start_polling(drop_pending_updates=True)
+    await app.updater.start_polling(drop_pending_updates=True, allowed_updates=["message", "callback_query", "chat_member", "my_chat_member"])
     logger.info("Scammer List Bot is live.")
 
-    # Background: auto-refresh scammer usernames every 6 hours
-    refresh_task = asyncio.create_task(
-        username_refresh_loop(app.bot), name="username-refresh"
-    )
+    # Background tasks
+    refresh_task = asyncio.create_task(username_refresh_loop(app.bot), name="username-refresh")
+    digest_task  = asyncio.create_task(weekly_digest_loop(app.bot),   name="weekly-digest")
 
     try:
         await asyncio.Event().wait()
     except (KeyboardInterrupt, SystemExit):
         pass
     finally:
-        refresh_task.cancel()
-        try:
-            await refresh_task
-        except asyncio.CancelledError:
-            pass
+        for task in (refresh_task, digest_task):
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
         await app.updater.stop()
         await app.stop()
         await app.shutdown()

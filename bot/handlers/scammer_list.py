@@ -11,14 +11,17 @@ PAGE_SIZE = 8
 
 
 def _build_page(entries: list[dict], page: int, total: int, total_pages: int) -> tuple[str, InlineKeyboardMarkup | None]:
+    SEV_ICON = {"high": "🔴", "medium": "🟡", "low": "🟢"}
     lines = []
     for e in entries:
-        uname   = f"@{e['username']}" if e.get("username") else "—"
-        tid     = f"<code>{e['telegram_id']}</code>" if e.get("telegram_id") else "—"
-        history = [u for u in (e.get("username_history") or []) if u]
-        old_str = "  |  ".join(f"@{u}" for u in history) if history else "—"
+        uname    = f"@{e['username']}" if e.get("username") else "—"
+        tid      = f"<code>{e['telegram_id']}</code>" if e.get("telegram_id") else "—"
+        history  = [u for u in (e.get("username_history") or []) if u]
+        old_str  = "  |  ".join(f"@{u}" for u in history) if history else "—"
+        sev      = (e.get("severity") or "medium").lower()
+        sev_icon = SEV_ICON.get(sev, "🟡")
         lines.append(em(
-            f"🔴 <b>#{e['id']}</b>  {uname}  ·  🔑 ID: {tid}\n"
+            f"{sev_icon} <b>#{e['id']}</b>  {uname}  ·  🔑 ID: {tid}\n"
             f"   🔄 Old usernames: {old_str}\n"
             f"   ⚠️ Reason: {(e.get('reason') or '')[:80]}"
         ))

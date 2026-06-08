@@ -1,4 +1,4 @@
-"""Public /check command — search by @username or Telegram ID."""
+"""Public /check command — search by @username, Telegram ID, or real name."""
 from __future__ import annotations
 
 import logging
@@ -6,23 +6,32 @@ from telegram import Update
 from telegram.ext import ContextTypes
 from telegram.error import TelegramError
 
-from bot.db import search_by_telegram_id, search_by_username, update_scammer_username, touch_username_check
+from bot.db import (
+    search_by_telegram_id, search_by_username,
+    search_by_name,
+    update_scammer_username, touch_username_check,
+)
 from bot.services.emoji_fx import em
 
 logger = logging.getLogger(__name__)
 
+SEV_ICON = {"high": "🔴", "medium": "🟡", "low": "🟢"}
+
 
 def _format_entry(e: dict) -> str:
-    uname   = f"@{e['username']}" if e.get("username") else "—"
-    tid     = str(e["telegram_id"]) if e.get("telegram_id") else "—"
-    history = [u for u in (e.get("username_history") or []) if u]
+    uname    = f"@{e['username']}" if e.get("username") else "—"
+    tid      = str(e["telegram_id"]) if e.get("telegram_id") else "—"
+    history  = [u for u in (e.get("username_history") or []) if u]
     hist_str = "  |  ".join(f"@{u}" for u in history) if history else "—"
+    sev      = (e.get("severity") or "medium").lower()
+    sev_icon = SEV_ICON.get(sev, "🟡")
     return em(
         f"🔴 <b>#{e['id']}</b>\n"
         f"  👤 Name: {e.get('name') or '—'}\n"
         f"  📝 Username: {uname}\n"
         f"  🔑 Telegram ID: <code>{tid}</code>\n"
         f"  🔄 Old usernames: {hist_str}\n"
+        f"  {sev_icon} Severity: {sev.capitalize()}\n"
         f"  ⚠️ Reason: {e['reason']}\n"
         f"  🔗 Proof: {e.get('proof') or '—'}\n"
         f"  📅 Added: {str(e.get('added_at') or '')[:10]}"
@@ -54,7 +63,7 @@ async def check_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     args = context.args
     if not args:
         await update.message.reply_text(
-            em("🔍 Usage:\n  /check @username\n  /check 123456789  (Telegram ID)"),
+            em("🔍 Usage:\n  /check @username\n  /check 123456789  (Telegram ID)\n  /check John Doe  (search by name)"),
             parse_mode="HTML",
         )
         return
@@ -98,15 +107,20 @@ async def check_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                         hist.append(old)
                     entry["username_history"] = hist
 
+        # Fallback: name search (includes rest of args)
+        if not results:
+            name_query = " ".join(args).strip()
+            results    = await search_by_name(name_query)
+
     if not results:
         await update.message.reply_text(
-            em(f"✅ <b>Not found</b> — <code>{query}</code> is not in the scammer list."),
+            em(f"✅ <b>Not found</b> — <code>{' '.join(args)}</code> is not in the scammer list."),
             parse_mode="HTML",
         )
         return
 
     body = "\n\n".join(_format_entry(e) for e in results)
     await update.message.reply_text(
-        em(f"⚠️ <b>Found {len(results)} record(s) for</b> <code>{query}</code>:\n\n") + body,
+        em(f"⚠️ <b>Found {len(results)} record(s) for</b> <code>{' '.join(args)}</code>:\n\n") + body,
         parse_mode="HTML",
     )

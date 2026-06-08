@@ -97,13 +97,30 @@ async def init_db() -> None:
                 label      TEXT,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
             );
+
+            CREATE TABLE IF NOT EXISTS bot_groups (
+                group_id  BIGINT PRIMARY KEY,
+                title     TEXT,
+                added_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                active    BOOLEAN NOT NULL DEFAULT TRUE
+            );
+
+            CREATE TABLE IF NOT EXISTS trusted_reporters (
+                user_id   BIGINT PRIMARY KEY,
+                username  TEXT,
+                added_by  BIGINT NOT NULL,
+                added_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
         """)
         # Idempotent migrations for columns added after initial deploy
         for tbl, col, definition in [
             ("scammers", "username_history",    "TEXT[] DEFAULT '{}'"),
             ("scammers", "last_username_check", "TIMESTAMPTZ"),
+            ("scammers", "severity",            "TEXT NOT NULL DEFAULT 'medium'"),
+            ("scammers", "proof_file_id",       "TEXT"),
             ("reports",  "target_full_name",    "TEXT"),
             ("reports",  "group_chat_id",       "BIGINT"),
+            ("reports",  "proof_file_id",       "TEXT"),
         ]:
             await conn.execute(
                 f"ALTER TABLE {tbl} ADD COLUMN IF NOT EXISTS {col} {definition};"
@@ -122,13 +139,16 @@ async def add_scammer(
     proof: Optional[str],
     added_by: int,
     notes: Optional[str] = None,
+    severity: str = "medium",
+    proof_file_id: Optional[str] = None,
 ) -> int:
     pool = await _get_pool()
     row = await pool.fetchrow(
-        """INSERT INTO scammers (telegram_id, username, name, reason, proof, added_by, notes)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)
+        """INSERT INTO scammers
+           (telegram_id, username, name, reason, proof, added_by, notes, severity, proof_file_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
            RETURNING id""",
-        telegram_id, username, name, reason, proof, added_by, notes,
+        telegram_id, username, name, reason, proof, added_by, notes, severity, proof_file_id,
     )
     return row["id"]
 
@@ -183,16 +203,17 @@ async def add_report(
     reason: str,
     proof: Optional[str],
     group_chat_id: Optional[int] = None,
+    proof_file_id: Optional[str] = None,
 ) -> int:
     pool = await _get_pool()
     row = await pool.fetchrow(
         """INSERT INTO reports
            (reporter_id, reporter_username, target_id, target_username,
-            target_full_name, reason, proof, group_chat_id)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            target_full_name, reason, proof, group_chat_id, proof_file_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
            RETURNING id""",
         reporter_id, reporter_username, target_id, target_username,
-        target_full_name, reason, proof, group_chat_id,
+        target_full_name, reason, proof, group_chat_id, proof_file_id,
     )
     return row["id"]
 
@@ -293,18 +314,126 @@ async def delete_custom_emoji(fallback: str) -> bool:
 # ── Username refresh ───────────────────────────────────────────────────────────
 
 async def get_scammers_needing_refresh(stale_hours: int = 6, batch: int = 100) -> list[dict]:
-    """Return scammers with a telegram_id whose username hasn't been checked recently."""
     pool = await _get_pool()
     return _rows(await pool.fetch(
-        """
-        SELECT * FROM scammers
-        WHERE telegram_id IS NOT NULL
-          AND (
-              last_username_check IS NULL
-              OR last_username_check < NOW() - ($1 * INTERVAL '1 hour')
-          )
-        ORDER BY last_username_check ASC NULLS FIRST
-        LIMIT $2
-        """,
+        """SELECT * FROM scammers
+           WHERE telegram_id IS NOT NULL
+             AND (last_username_check IS NULL
+                  OR last_username_check < NOW() - ($1 * INTERVAL '1 hour'))
+           ORDER BY last_username_check ASC NULLS FIRST
+           LIMIT $2""",
         stale_hours, batch,
     ))
+
+
+# ── Name search ───────────────────────────────────────────────────────────────
+
+async def search_by_name(name: str) -> list[dict]:
+    pool = await _get_pool()
+    return _rows(await pool.fetch(
+        "SELECT * FROM scammers WHERE LOWER(name) LIKE $1", f"%{name.lower()}%"
+    ))
+
+
+# ── Duplicate check ───────────────────────────────────────────────────────────
+
+async def scammer_exists(telegram_id: Optional[int], username: Optional[str]) -> Optional[dict]:
+    """Return first matching scammer by ID or username, or None."""
+    pool = await _get_pool()
+    if telegram_id:
+        row = await pool.fetchrow("SELECT * FROM scammers WHERE telegram_id = $1 LIMIT 1", telegram_id)
+        if row:
+            return _row(row)
+    if username:
+        row = await pool.fetchrow(
+            "SELECT * FROM scammers WHERE LOWER(username) = $1 LIMIT 1", username.lower()
+        )
+        if row:
+            return _row(row)
+    return None
+
+
+# ── Bot Groups ────────────────────────────────────────────────────────────────
+
+async def upsert_bot_group(group_id: int, title: Optional[str]) -> None:
+    pool = await _get_pool()
+    await pool.execute(
+        """INSERT INTO bot_groups (group_id, title, active)
+           VALUES ($1, $2, TRUE)
+           ON CONFLICT (group_id) DO UPDATE
+             SET title = COALESCE(EXCLUDED.title, bot_groups.title),
+                 active = TRUE""",
+        group_id, title,
+    )
+
+
+async def deactivate_bot_group(group_id: int) -> None:
+    pool = await _get_pool()
+    await pool.execute("UPDATE bot_groups SET active = FALSE WHERE group_id = $1", group_id)
+
+
+async def list_active_bot_groups() -> list[dict]:
+    pool = await _get_pool()
+    return _rows(await pool.fetch("SELECT * FROM bot_groups WHERE active = TRUE"))
+
+
+# ── Trusted Reporters ─────────────────────────────────────────────────────────
+
+async def add_trusted_reporter(user_id: int, username: Optional[str], added_by: int) -> None:
+    pool = await _get_pool()
+    await pool.execute(
+        """INSERT INTO trusted_reporters (user_id, username, added_by)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (user_id) DO UPDATE SET username = EXCLUDED.username""",
+        user_id, username, added_by,
+    )
+
+
+async def remove_trusted_reporter(user_id: int) -> bool:
+    pool = await _get_pool()
+    result = await pool.execute("DELETE FROM trusted_reporters WHERE user_id = $1", user_id)
+    return result.endswith("1")
+
+
+async def list_trusted_reporters() -> list[dict]:
+    pool = await _get_pool()
+    return _rows(await pool.fetch("SELECT * FROM trusted_reporters ORDER BY added_at ASC"))
+
+
+async def is_trusted_reporter(user_id: int) -> bool:
+    pool = await _get_pool()
+    row = await pool.fetchrow("SELECT 1 FROM trusted_reporters WHERE user_id = $1", user_id)
+    return row is not None
+
+
+# ── Weekly digest stats ───────────────────────────────────────────────────────
+
+async def get_weekly_stats() -> dict:
+    pool = await _get_pool()
+    total      = await pool.fetchval("SELECT COUNT(*) FROM scammers")
+    new_week   = await pool.fetchval(
+        "SELECT COUNT(*) FROM scammers WHERE added_at > NOW() - INTERVAL '7 days'"
+    )
+    rep_total  = await pool.fetchval("SELECT COUNT(*) FROM reports")
+    rep_week   = await pool.fetchval(
+        "SELECT COUNT(*) FROM reports WHERE reported_at > NOW() - INTERVAL '7 days'"
+    )
+    approved_w = await pool.fetchval(
+        "SELECT COUNT(*) FROM reports WHERE status='approved' AND reported_at > NOW() - INTERVAL '7 days'"
+    )
+    # Top 5 reporters this week
+    top = await pool.fetch(
+        """SELECT reporter_username, reporter_id, COUNT(*) AS cnt
+           FROM reports
+           WHERE reported_at > NOW() - INTERVAL '7 days'
+           GROUP BY reporter_username, reporter_id
+           ORDER BY cnt DESC LIMIT 5"""
+    )
+    return {
+        "total_scammers": total,
+        "new_this_week":  new_week,
+        "reports_total":  rep_total,
+        "reports_week":   rep_week,
+        "approved_week":  approved_w,
+        "top_reporters":  [dict(r) for r in top],
+    }
