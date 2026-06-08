@@ -12,7 +12,7 @@ from telegram import Update
 from telegram.ext import ContextTypes
 from telegram.error import TelegramError
 
-from bot.db import search_by_telegram_id
+from bot.db import search_by_telegram_id, search_by_username, update_scammer_telegram_id
 from bot.services.emoji_fx import em
 
 logger = logging.getLogger(__name__)
@@ -37,9 +37,26 @@ async def on_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if user.is_bot:
         return
 
+    # Check by Telegram ID first (fastest)
     results = await search_by_telegram_id(user.id)
+
+    # If not found by ID, try matching by current username
+    if not results and user.username:
+        results = await search_by_username(user.username)
+
     if not results:
         return
+
+    # If we found them by username but DB has no telegram_id → update it now
+    # (scammer joined a group, so we have their real ID directly from the event)
+    for entry in results:
+        if not entry.get("telegram_id") and user.id:
+            await update_scammer_telegram_id(entry["id"], user.id, user.username)
+            entry["telegram_id"] = user.id
+            logger.info(
+                "Auto-resolved telegram_id=%s for scammer #%s (@%s) on group join",
+                user.id, entry["id"], user.username,
+            )
 
     # Build alert
     e = results[0]
