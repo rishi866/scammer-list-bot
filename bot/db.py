@@ -59,15 +59,17 @@ async def init_db() -> None:
     async with _pool.acquire() as conn:
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS scammers (
-                id          BIGSERIAL PRIMARY KEY,
-                telegram_id BIGINT,
-                username    TEXT,
-                name        TEXT,
-                reason      TEXT NOT NULL,
-                proof       TEXT,
-                added_by    BIGINT NOT NULL,
-                added_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                notes       TEXT
+                id                  BIGSERIAL PRIMARY KEY,
+                telegram_id         BIGINT,
+                username            TEXT,
+                username_history    TEXT[]       DEFAULT '{}',
+                last_username_check TIMESTAMPTZ,
+                name                TEXT,
+                reason              TEXT NOT NULL,
+                proof               TEXT,
+                added_by            BIGINT NOT NULL,
+                added_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                notes               TEXT
             );
 
             CREATE INDEX IF NOT EXISTS idx_scammers_telegram_id ON scammers(telegram_id);
@@ -85,6 +87,14 @@ async def init_db() -> None:
                 reported_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
             );
         """)
+        # Migrate existing tables that were created before these columns existed
+        for col, definition in [
+            ("username_history",    "TEXT[] DEFAULT '{}'"),
+            ("last_username_check", "TIMESTAMPTZ"),
+        ]:
+            await conn.execute(
+                f"ALTER TABLE scammers ADD COLUMN IF NOT EXISTS {col} {definition};"
+            )
     logger.info("Schema ready")
 
 
@@ -192,3 +202,57 @@ async def count_reports(status: Optional[str] = None) -> int:
     if status:
         return await pool.fetchval("SELECT COUNT(*) FROM reports WHERE status = $1", status)
     return await pool.fetchval("SELECT COUNT(*) FROM reports")
+
+
+# ── Username auto-update ───────────────────────────────────────────────────────
+
+async def update_scammer_username(scammer_id: int, new_username: Optional[str], old_username: Optional[str]) -> None:
+    """Set current username; push old one into history if not already there."""
+    pool = await _get_pool()
+    if old_username:
+        await pool.execute(
+            """
+            UPDATE scammers
+            SET
+                username            = $1,
+                username_history    = CASE
+                    WHEN username_history IS NULL           THEN ARRAY[$2]::TEXT[]
+                    WHEN $2 = ANY(username_history)         THEN username_history
+                    ELSE array_append(username_history, $2)
+                END,
+                last_username_check = NOW()
+            WHERE id = $3
+            """,
+            new_username, old_username, scammer_id,
+        )
+    else:
+        await pool.execute(
+            "UPDATE scammers SET username = $1, last_username_check = NOW() WHERE id = $2",
+            new_username, scammer_id,
+        )
+
+
+async def touch_username_check(scammer_id: int) -> None:
+    """Record that we checked this scammer's username right now (no change found)."""
+    pool = await _get_pool()
+    await pool.execute(
+        "UPDATE scammers SET last_username_check = NOW() WHERE id = $1", scammer_id
+    )
+
+
+async def get_scammers_needing_refresh(stale_hours: int = 6, batch: int = 100) -> list[dict]:
+    """Return scammers with a telegram_id whose username hasn't been checked recently."""
+    pool = await _get_pool()
+    return _rows(await pool.fetch(
+        """
+        SELECT * FROM scammers
+        WHERE telegram_id IS NOT NULL
+          AND (
+              last_username_check IS NULL
+              OR last_username_check < NOW() - ($1 * INTERVAL '1 hour')
+          )
+        ORDER BY last_username_check ASC NULLS FIRST
+        LIMIT $2
+        """,
+        stale_hours, batch,
+    ))

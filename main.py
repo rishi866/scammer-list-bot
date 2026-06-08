@@ -21,6 +21,7 @@ from telegram.request import HTTPXRequest
 from bot.db import init_db
 from bot.handlers.start import start_command, help_command
 from bot.handlers.check import check_command
+from bot.services.username_refresher import username_refresh_loop
 from bot.handlers.report import build_report_handler
 from bot.handlers.admin import (
     build_add_handler,
@@ -77,11 +78,20 @@ async def run() -> None:
     await app.updater.start_polling(drop_pending_updates=True)
     logger.info("Scammer List Bot is live.")
 
+    refresh_task = asyncio.create_task(
+        username_refresh_loop(app.bot), name="username-refresh"
+    )
+
     try:
         await asyncio.Event().wait()
     except (KeyboardInterrupt, SystemExit):
         pass
     finally:
+        refresh_task.cancel()
+        try:
+            await refresh_task
+        except asyncio.CancelledError:
+            pass
         await app.updater.stop()
         await app.stop()
         await app.shutdown()
