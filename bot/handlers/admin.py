@@ -58,23 +58,60 @@ async def add_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 async def add_target(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    from telegram.error import TelegramError
     raw = update.message.text.strip()
+
     if raw.lower() == "none":
         context.user_data["add_target_id"]    = None
         context.user_data["add_target_uname"] = None
-    elif raw.lstrip("@").isdigit():
-        context.user_data["add_target_id"]    = int(raw.lstrip("@"))
-        context.user_data["add_target_uname"] = None
+        context.user_data["add_target_name"]  = None
     else:
-        context.user_data["add_target_id"]    = None
-        context.user_data["add_target_uname"] = raw.lstrip("@")
+        # Try to resolve via Telegram — works for both @username and numeric ID
+        lookup = int(raw.lstrip("@")) if raw.lstrip("@").isdigit() else f"@{raw.lstrip('@')}"
+        try:
+            chat = await context.bot.get_chat(lookup)
+            context.user_data["add_target_id"]    = chat.id
+            context.user_data["add_target_uname"] = chat.username
+            full_name = " ".join(filter(None, [chat.first_name, chat.last_name])) or None
+            context.user_data["add_target_name"]  = full_name
 
-    await update.message.reply_text(em("👤 Step 2/5 — Their full name:"), parse_mode="HTML")
+            # Show what was fetched
+            uname = f"@{chat.username}" if chat.username else "—"
+            await update.message.reply_text(
+                em(
+                    f"✅ <b>Resolved from Telegram:</b>\n"
+                    f"  👤 Name: <b>{full_name or '—'}</b>\n"
+                    f"  📝 Username: {uname}\n"
+                    f"  🔑 ID: <code>{chat.id}</code>\n\n"
+                    f"👤 Step 2/5 — Confirm or change their full name\n"
+                    f"(Send <b>auto</b> to keep: <b>{full_name or '—'}</b>):"
+                ),
+                parse_mode="HTML",
+            )
+        except TelegramError as e:
+            # Could not resolve — store what was given manually
+            if raw.lstrip("@").isdigit():
+                context.user_data["add_target_id"]    = int(raw.lstrip("@"))
+                context.user_data["add_target_uname"] = None
+            else:
+                context.user_data["add_target_id"]    = None
+                context.user_data["add_target_uname"] = raw.lstrip("@")
+            context.user_data["add_target_name"] = None
+            await update.message.reply_text(
+                em(f"⚠️ Could not fetch from Telegram (<code>{e}</code>).\n\n"
+                   f"👤 Step 2/5 — Enter their full name manually:"),
+                parse_mode="HTML",
+            )
     return ADD_NAME
 
 
 async def add_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data["add_name"] = update.message.text.strip()
+    raw = update.message.text.strip()
+    # "auto" = keep the Telegram-fetched name
+    if raw.lower() == "auto" and context.user_data.get("add_target_name"):
+        context.user_data["add_name"] = context.user_data["add_target_name"]
+    else:
+        context.user_data["add_name"] = raw
     await update.message.reply_text(em("⚠️ Step 3/5 — Reason for listing:"), parse_mode="HTML")
     return ADD_REASON
 
