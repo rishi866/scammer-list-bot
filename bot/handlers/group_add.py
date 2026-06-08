@@ -1,9 +1,4 @@
-"""/add @username [reason] — group member submission flow.
-
-Any group member can call this.  The bot resolves the target's Telegram ID
-via get_chat, then DMs every admin with an Approve / Reject inline keyboard.
-The scammer is only added to the database after an admin approves.
-"""
+"""/add @username [reason] — group member submission flow."""
 from __future__ import annotations
 
 import logging
@@ -14,6 +9,7 @@ from telegram.ext import ContextTypes
 from telegram.error import TelegramError
 
 from bot.db import add_report
+from bot.services.emoji_fx import em
 
 logger = logging.getLogger(__name__)
 
@@ -26,15 +22,13 @@ async def group_add_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     args = context.args
     if not args:
         await update.message.reply_text(
-            "Usage: /add @username [reason]\n"
-            "Example: /add @scammer123 Took payment and vanished"
+            em("📝 Usage: /add @username [reason]\nExample: /add @scammer123 Took payment and vanished")
         )
         return
 
     target_arg = args[0].strip()
     reason     = " ".join(args[1:]).strip() if len(args) > 1 else "No reason provided"
 
-    # ── Resolve username / ID → Telegram profile ──────────────────────────────
     target_id       : int | None = None
     target_username : str | None = target_arg.lstrip("@") or None
     target_name     : str        = "Unknown"
@@ -47,7 +41,6 @@ async def group_add_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         target_name     = " ".join(filter(None, [chat.first_name, chat.last_name])) or "Unknown"
     except TelegramError as e:
         logger.warning("Could not resolve %s via Telegram: %s", lookup, e)
-        # We still save the report — admin can verify manually
 
     submitter = update.effective_user
     group     = update.effective_chat
@@ -63,15 +56,14 @@ async def group_add_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         group_chat_id    = group.id,
     )
 
-    # ── Build admin notification ───────────────────────────────────────────────
     uname_display = f"@{target_username}" if target_username else "—"
-    notif = (
+    notif = em(
         f"📨 <b>Scammer Submission #{report_id}</b>\n\n"
-        f"👤 <b>Target (resolved from Telegram):</b>\n"
-        f"  Username : {uname_display}\n"
-        f"  Tele ID  : <code>{target_id or '— (could not resolve)'}</code>\n"
-        f"  Full Name: {target_name}\n\n"
-        f"📝 <b>Reason:</b> {reason}\n\n"
+        f"👤 <b>Target (from Telegram):</b>\n"
+        f"  📝 Username : {uname_display}\n"
+        f"  🔑 Tele ID  : <code>{target_id or '— (could not resolve)'}</code>\n"
+        f"  🙍 Full Name: {target_name}\n\n"
+        f"⚠️ <b>Reason:</b> {reason}\n\n"
         f"📤 <b>Submitted by:</b> @{submitter.username or submitter.id} "
         f"(ID: <code>{submitter.id}</code>)\n"
         f"📌 <b>Group:</b> {group.title or 'Unknown'}"
@@ -93,6 +85,6 @@ async def group_add_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         logger.error("No admins were notified for report #%s", report_id)
 
     await update.message.reply_text(
-        f"✅ Submission #{report_id} sent to admins for review. Thank you!",
+        em(f"✅ Submission #{report_id} sent to admins for review. Thank you!"),
         reply_to_message_id=update.message.message_id,
     )

@@ -19,12 +19,14 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, filt
 from telegram.request import HTTPXRequest
 
 from bot.db import init_db
+from bot.services import emoji_fx
 from bot.handlers.start        import start_command, help_command
 from bot.handlers.check        import check_command
 from bot.handlers.group_add    import group_add_command
 from bot.handlers.scammer_list import scammer_list_command
 from bot.handlers.report       import build_report_handler
 from bot.handlers.callbacks    import callback_router
+from bot.handlers.emoji_admin  import setemoji_cmd, delemoji_cmd, listemoji_cmd, loadpack_cmd
 from bot.handlers.admin        import (
     build_add_handler,
     remove_command,
@@ -46,36 +48,47 @@ async def run() -> None:
 
     await init_db()
 
+    # Load animated emoji mappings from DB
+    try:
+        await emoji_fx.load()
+        logger.info("emoji_fx ready")
+    except Exception as e:
+        logger.warning("emoji_fx load failed (non-fatal): %s", e)
+
     req = HTTPXRequest(connect_timeout=10, read_timeout=15, write_timeout=20, pool_timeout=15)
     app = Application.builder().token(BOT_TOKEN).request(req).build()
 
-    # ── Handlers ──────────────────────────────────────────────────────────────
-
-    # Public (group + private)
+    # ── Public handlers (group + private) ────────────────────────────────────
     app.add_handler(CommandHandler("start",        start_command))
     app.add_handler(CommandHandler("help",         help_command))
     app.add_handler(CommandHandler("check",        check_command))
     app.add_handler(CommandHandler("scammer_list", scammer_list_command))
 
-    # /add in GROUP → submission flow (goes to admin for approval)
+    # /add in GROUP → submission flow (any member → admin approval)
     app.add_handler(CommandHandler("add", group_add_command, filters=filters.ChatType.GROUPS))
 
-    # /report in PRIVATE → multi-step report (also goes to approval)
+    # /report in private → multi-step (goes to approval)
     app.add_handler(build_report_handler())
 
-    # Inline button callbacks (approve/reject submissions + scammer_list pagination)
+    # Inline button callbacks (approve/reject + scammer_list pagination)
     app.add_handler(CallbackQueryHandler(callback_router))
 
-    # Admin commands (private chat only)
-    app.add_handler(build_add_handler())   # multi-step /add in private → direct DB insert
-    app.add_handler(CommandHandler("remove",  remove_command))
-    app.add_handler(CommandHandler("list",    list_command))
-    app.add_handler(CommandHandler("pending", pending_command))
-    app.add_handler(CommandHandler("approve", approve_command))
-    app.add_handler(CommandHandler("reject",  reject_command))
-    app.add_handler(CommandHandler("stats",   stats_command))
+    # ── Admin-only (private chat) ─────────────────────────────────────────────
+    app.add_handler(build_add_handler())   # multi-step /add in PM → direct DB insert
+    app.add_handler(CommandHandler("remove",    remove_command))
+    app.add_handler(CommandHandler("list",      list_command))
+    app.add_handler(CommandHandler("pending",   pending_command))
+    app.add_handler(CommandHandler("approve",   approve_command))
+    app.add_handler(CommandHandler("reject",    reject_command))
+    app.add_handler(CommandHandler("stats",     stats_command))
 
-    # ── Bot command menus ──────────────────────────────────────────────────────
+    # ── Emoji admin commands ───────────────────────────────────────────────────
+    app.add_handler(CommandHandler("setemoji",  setemoji_cmd))
+    app.add_handler(CommandHandler("delemoji",  delemoji_cmd))
+    app.add_handler(CommandHandler("listemoji", listemoji_cmd))
+    app.add_handler(CommandHandler("loadpack",  loadpack_cmd))
+
+    # ── Bot command menus ─────────────────────────────────────────────────────
     group_cmds = [
         BotCommand("add",          "Submit a scammer for admin review"),
         BotCommand("check",        "Check if someone is a known scammer"),

@@ -1,14 +1,11 @@
-"""/scammer_list — paginated list of all confirmed scammers.
-
-Works in both group and private chat.
-Navigation is done via inline "Prev / Next" buttons (callback sl_page:<n>).
-"""
+"""/scammer_list — paginated list of all confirmed scammers."""
 from __future__ import annotations
 
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, Message
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
 
 from bot.db import list_scammers, count_scammers
+from bot.services.emoji_fx import em
 
 PAGE_SIZE = 8
 
@@ -20,16 +17,15 @@ def _build_page(entries: list[dict], page: int, total: int, total_pages: int) ->
         tid     = f"<code>{e['telegram_id']}</code>" if e.get("telegram_id") else "—"
         history = [u for u in (e.get("username_history") or []) if u]
         old_str = "  |  ".join(f"@{u}" for u in history) if history else "—"
-        lines.append(
-            f"🔴 <b>#{e['id']}</b>  {uname}  ·  ID: {tid}\n"
-            f"   ↪ Old usernames: {old_str}\n"
-            f"   ↪ Reason: {(e.get('reason') or '')[:80]}"
-        )
+        lines.append(em(
+            f"🔴 <b>#{e['id']}</b>  {uname}  ·  🔑 ID: {tid}\n"
+            f"   🔄 Old usernames: {old_str}\n"
+            f"   ⚠️ Reason: {(e.get('reason') or '')[:80]}"
+        ))
 
-    text = (
+    header = em(
         f"📋 <b>Confirmed Scammers — {total} total</b>  "
         f"(page {page + 1}/{total_pages})\n\n"
-        + "\n\n".join(lines)
     )
 
     nav = []
@@ -39,7 +35,7 @@ def _build_page(entries: list[dict], page: int, total: int, total_pages: int) ->
         nav.append(InlineKeyboardButton("Next ▶", callback_data=f"sl_page:{page + 2}"))
 
     keyboard = InlineKeyboardMarkup([nav]) if nav else None
-    return text, keyboard
+    return header + "\n\n".join(lines), keyboard
 
 
 async def scammer_list_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -50,7 +46,7 @@ async def scammer_list_command(update: Update, context: ContextTypes.DEFAULT_TYP
 
     total = await count_scammers()
     if total == 0:
-        await update.message.reply_text("No confirmed scammers in the list yet.")
+        await update.message.reply_text(em("📋 No confirmed scammers in the list yet."))
         return
 
     total_pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
@@ -61,7 +57,6 @@ async def scammer_list_command(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 async def scammer_list_page_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handles sl_page:<n> inline button — edits the existing message in place."""
     query = update.callback_query
     await query.answer()
 

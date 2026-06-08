@@ -89,6 +89,15 @@ async def init_db() -> None:
                 reported_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
             );
         """)
+            CREATE TABLE IF NOT EXISTS custom_emojis (
+                id         BIGSERIAL PRIMARY KEY,
+                fallback   TEXT NOT NULL UNIQUE,
+                custom_id  TEXT NOT NULL,
+                keyword    TEXT,
+                label      TEXT,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+        """)
         # Idempotent migrations for columns added after initial deploy
         for tbl, col, definition in [
             ("scammers", "username_history",    "TEXT[] DEFAULT '{}'"),
@@ -247,6 +256,41 @@ async def touch_username_check(scammer_id: int) -> None:
         "UPDATE scammers SET last_username_check = NOW() WHERE id = $1", scammer_id
     )
 
+
+# ── Custom Emojis ─────────────────────────────────────────────────────────────
+
+async def list_custom_emojis() -> list[dict]:
+    pool = await _get_pool()
+    return _rows(await pool.fetch("SELECT * FROM custom_emojis ORDER BY created_at ASC"))
+
+
+async def get_custom_emoji_by_fallback(fallback: str) -> Optional[dict]:
+    pool = await _get_pool()
+    return _row(await pool.fetchrow("SELECT * FROM custom_emojis WHERE fallback = $1", fallback))
+
+
+async def upsert_custom_emoji(
+    *, fallback: str, custom_id: str, keyword: Optional[str] = None, label: Optional[str] = None
+) -> None:
+    pool = await _get_pool()
+    await pool.execute(
+        """INSERT INTO custom_emojis (fallback, custom_id, keyword, label)
+           VALUES ($1, $2, $3, $4)
+           ON CONFLICT (fallback) DO UPDATE
+             SET custom_id = EXCLUDED.custom_id,
+                 keyword   = COALESCE(EXCLUDED.keyword, custom_emojis.keyword),
+                 label     = COALESCE(EXCLUDED.label,   custom_emojis.label)""",
+        fallback, custom_id, keyword, label,
+    )
+
+
+async def delete_custom_emoji(fallback: str) -> bool:
+    pool = await _get_pool()
+    result = await pool.execute("DELETE FROM custom_emojis WHERE fallback = $1", fallback)
+    return result.endswith("1")
+
+
+# ── Username refresh ───────────────────────────────────────────────────────────
 
 async def get_scammers_needing_refresh(stale_hours: int = 6, batch: int = 100) -> list[dict]:
     """Return scammers with a telegram_id whose username hasn't been checked recently."""

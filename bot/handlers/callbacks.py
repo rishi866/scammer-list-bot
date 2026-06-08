@@ -1,10 +1,4 @@
-"""Central callback query router.
-
-Routes:
-  approve_sub:<report_id>  — admin approves a member submission
-  reject_sub:<report_id>   — admin rejects a member submission
-  sl_page:<page_number>    — navigate scammer_list pages
-"""
+"""Central callback query router."""
 from __future__ import annotations
 
 import logging
@@ -14,6 +8,7 @@ from telegram.ext import ContextTypes
 
 from bot.db import get_report, update_report_status, add_scammer
 from bot.handlers.scammer_list import scammer_list_page_callback
+from bot.services.emoji_fx import em
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +19,7 @@ async def _approve(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     report    = await get_report(report_id)
 
     if not report:
-        await query.edit_message_text("❌ Report not found.")
+        await query.edit_message_text(em("❌ Report not found."))
         return
 
     if report["status"] != "pending":
@@ -42,7 +37,6 @@ async def _approve(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
     await update_report_status(report_id, "approved")
 
-    # Notify group that the scammer is now confirmed
     group_chat_id = report.get("group_chat_id")
     if group_chat_id:
         uname = f"@{report['target_username']}" if report.get("target_username") else "—"
@@ -50,11 +44,13 @@ async def _approve(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         try:
             await context.bot.send_message(
                 group_chat_id,
-                f"✅ <b>Scammer Confirmed — #{scammer_id}</b>\n\n"
-                f"Username : {uname}\n"
-                f"Tele ID  : {tid}\n"
-                f"Reason   : {report['reason']}\n\n"
-                f"Use /scammer_list to see the full list.",
+                em(
+                    f"✅ <b>Scammer Confirmed — #{scammer_id}</b>\n\n"
+                    f"📝 Username : {uname}\n"
+                    f"🔑 Tele ID  : {tid}\n"
+                    f"⚠️ Reason   : {report['reason']}\n\n"
+                    f"📋 Use /scammer_list to see the full list."
+                ),
                 parse_mode="HTML",
             )
         except Exception as exc:
@@ -63,7 +59,7 @@ async def _approve(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     approver = f"@{query.from_user.username}" if query.from_user.username else str(query.from_user.id)
     await query.edit_message_text(
         query.message.text
-        + f"\n\n✅ <b>Approved</b> by {approver} → Scammer #{scammer_id}",
+        + em(f"\n\n✅ <b>Approved</b> by {approver} → Scammer #{scammer_id}"),
         parse_mode="HTML",
     )
 
@@ -74,7 +70,7 @@ async def _reject(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     report    = await get_report(report_id)
 
     if not report:
-        await query.edit_message_text("❌ Report not found.")
+        await query.edit_message_text(em("❌ Report not found."))
         return
 
     if report["status"] != "pending":
@@ -85,7 +81,7 @@ async def _reject(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     rejecter = f"@{query.from_user.username}" if query.from_user.username else str(query.from_user.id)
     await query.edit_message_text(
-        query.message.text + f"\n\n❌ <b>Rejected</b> by {rejecter}",
+        query.message.text + em(f"\n\n❌ <b>Rejected</b> by {rejecter}"),
         parse_mode="HTML",
     )
 
