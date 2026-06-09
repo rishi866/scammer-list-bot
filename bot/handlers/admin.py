@@ -393,6 +393,78 @@ async def handle_forwarded_message(update: Update, context: ContextTypes.DEFAULT
     )
 
 
+# ── /addid ────────────────────────────────────────────────────────────────────
+
+@admin_only
+async def addid_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/addid <telegram_id> [reason]
+    Add a scammer by Telegram ID only — username & name auto-fetched.
+    Example: /addid 5886335494 Fraud seller
+    """
+    args = context.args
+    if not args or not args[0].isdigit():
+        await update.message.reply_text(
+            em(
+                "Usage: /addid <telegram_id> [reason]\n"
+                "Example: /addid 5886335494 Fraud seller\n\n"
+                "Bot will auto-fetch their current username & name."
+            ),
+        )
+        return
+
+    telegram_id = int(args[0])
+    reason      = " ".join(args[1:]).strip() if len(args) > 1 else "No reason provided"
+
+    # Check duplicate
+    dup = await scammer_exists(telegram_id, None)
+    if dup:
+        uname_d = f"@{dup.get('username')}" if dup.get("username") else "—"
+        await update.message.reply_text(
+            em(f"⚠️ Already listed as <b>#{dup['id']}</b> ({uname_d})."),
+            parse_mode="HTML",
+        )
+        return
+
+    # Try to fetch current info from Telegram
+    username  = None
+    full_name = "Unknown"
+    fetched   = False
+
+    try:
+        chat      = await context.bot.get_chat(telegram_id)
+        username  = chat.username
+        full_name = " ".join(filter(None, [chat.first_name, chat.last_name])) or "Unknown"
+        fetched   = True
+    except TelegramError as e:
+        logger.info("get_chat(%s) failed (will track by ID only): %s", telegram_id, e)
+
+    scammer_id = await add_scammer(
+        telegram_id = telegram_id,
+        username    = username,
+        name        = full_name,
+        reason      = reason,
+        proof       = None,
+        added_by    = update.effective_user.id,
+        severity    = "medium",
+    )
+
+    uname_str = f"@{username}" if username else "— (will update when bot sees them)"
+    fetch_note = "✅ Fetched from Telegram" if fetched else "⚠️ Could not fetch now — will auto-update later"
+
+    await update.message.reply_text(
+        em(
+            f"✅ <b>Scammer #{scammer_id} added!</b>\n\n"
+            f"🔑 Telegram ID : <code>{telegram_id}</code>\n"
+            f"📝 Username    : {uname_str}\n"
+            f"👤 Name        : {full_name}\n"
+            f"⚠️ Reason      : {reason}\n\n"
+            f"{fetch_note}\n"
+            f"🔄 Username will auto-refresh every 6 hours."
+        ),
+        parse_mode="HTML",
+    )
+
+
 # ── /setid ────────────────────────────────────────────────────────────────────
 
 @admin_only

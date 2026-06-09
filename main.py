@@ -42,6 +42,7 @@ from bot.handlers.admin        import (
     stats_command,
     fixids_command,
     setid_command,
+    addid_command,
     handle_forwarded_message,
 )
 from bot.services.username_refresher import username_refresh_loop
@@ -92,6 +93,7 @@ async def run() -> None:
     app.add_handler(CommandHandler("stats",         stats_command))
     app.add_handler(CommandHandler("fixids",        fixids_command))
     app.add_handler(CommandHandler("setid",         setid_command))
+    app.add_handler(CommandHandler("addid",         addid_command))
 
     # Forward any message from a scammer → bot auto-resolves their ID
     app.add_handler(MessageHandler(
