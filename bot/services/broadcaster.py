@@ -12,7 +12,7 @@ from telegram import Bot, Update
 from telegram.ext import ContextTypes
 from telegram.error import TelegramError
 
-from bot.db import upsert_bot_group, deactivate_bot_group, list_active_bot_groups
+from bot.db import upsert_bot_group, deactivate_bot_group, list_active_bot_groups, list_scammers, count_scammers
 from bot.services.emoji_fx import em
 
 logger = logging.getLogger(__name__)
@@ -33,9 +33,65 @@ async def on_bot_member_update(update: Update, context: ContextTypes.DEFAULT_TYP
     if new_st in ("member", "administrator"):
         await upsert_bot_group(chat.id, chat.title)
         logger.info("Bot added to group: %s (%s)", chat.title, chat.id)
+        # Scan existing members against scammer list
+        await _scan_existing_members(context.bot, chat.id, chat.title)
     elif new_st in ("left", "kicked", "banned", "restricted"):
         await deactivate_bot_group(chat.id)
         logger.info("Bot removed from group: %s (%s)", chat.title, chat.id)
+
+
+async def _scan_existing_members(bot: Bot, group_id: int, group_title: str) -> None:
+    """When bot joins a group, check all known scammers (with IDs) against it."""
+    import os
+    from telegram.error import TelegramError
+
+    auto_ban  = os.getenv("AUTO_BAN", "false").lower() in ("1", "true", "yes")
+    total     = await count_scammers()
+    found     = []
+
+    # Fetch all scammers in batches
+    batch  = 200
+    offset = 0
+    while offset < total:
+        scammers = await list_scammers(limit=batch, offset=offset)
+        offset  += batch
+        for s in scammers:
+            tg_id = s.get("telegram_id")
+            if not tg_id:
+                continue
+            try:
+                member = await bot.get_chat_member(group_id, tg_id)
+                if member.status in ("member", "restricted", "creator", "administrator"):
+                    found.append(s)
+                    # Kick/ban immediately
+                    await bot.ban_chat_member(group_id, tg_id)
+                    if not auto_ban:
+                        await bot.unban_chat_member(group_id, tg_id, only_if_banned=True)
+                    logger.info("Scammer %s kicked from %s on bot join scan", tg_id, group_id)
+            except TelegramError:
+                pass  # User not in group or other error — skip
+
+    if found:
+        action   = "🔨 Banned" if auto_ban else "🦵 Kicked"
+        names    = "\n".join(
+            f"  • @{s['username']}" if s.get("username") else f"  • ID {s['telegram_id']}"
+            for s in found
+        )
+        try:
+            await bot.send_message(
+                group_id,
+                em(
+                    f"🚨 <b>Scammer Scan Complete</b>\n\n"
+                    f"{action} <b>{len(found)}</b> known scammer(s) found in this group:\n"
+                    f"{names}\n\n"
+                    f"📋 Use /scammer_list to see the full list."
+                ),
+                parse_mode="HTML",
+            )
+        except TelegramError as e:
+            logger.warning("Could not send scan result to %s: %s", group_id, e)
+    else:
+        logger.info("Scan complete for %s — no scammers found", group_title)
 
 
 async def broadcast_scammer(
