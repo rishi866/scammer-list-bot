@@ -39,15 +39,19 @@ def _is_admin(uid: int) -> bool:
 
 
 def _extract_fwd_user(msg):
-    orig = None
-    if msg.forward_origin and hasattr(msg.forward_origin, "sender_user"):
-        orig = msg.forward_origin.sender_user
-    if not orig and msg.forward_from:
-        orig = msg.forward_from
-    if not orig:
+    """Extract (telegram_id, username, full_name) from a forwarded message.
+    PTB v21 / Bot API 7+ — only forward_origin exists, no forward_from.
+    Returns (None, None, None) for channels/hidden-user forwards.
+    """
+    if not msg.forward_origin:
         return None, None, None
-    name = " ".join(filter(None, [orig.first_name, orig.last_name])) or "Unknown"
-    return orig.id, orig.username, name
+    origin = msg.forward_origin
+    # MessageOriginUser has sender_user; Channel/Chat/HiddenUser do not
+    sender = getattr(origin, "sender_user", None)
+    if not sender:
+        return None, None, None
+    name = " ".join(filter(None, [sender.first_name, sender.last_name])) or "Unknown"
+    return sender.id, sender.username, name
 
 
 def _clear(ud: dict) -> None:
