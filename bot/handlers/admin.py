@@ -322,6 +322,43 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     )
 
 
+# ── /setid ────────────────────────────────────────────────────────────────────
+
+@admin_only
+async def setid_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/setid <scammer_db_id> <telegram_id>
+    Manually set the Telegram ID for a scammer entry.
+    Example: /setid 1 5886335494
+    """
+    args = context.args
+    if len(args) < 2 or not args[0].isdigit() or not args[1].isdigit():
+        await update.message.reply_text(
+            em("Usage: /setid <scammer_#> <telegram_id>\nExample: /setid 1 5886335494"),
+            parse_mode="HTML",
+        )
+        return
+
+    scammer_db_id = int(args[0])
+    telegram_id   = int(args[1])
+
+    scammer = await get_scammer_by_id(scammer_db_id)
+    if not scammer:
+        await update.message.reply_text(em(f"❌ Scammer #{scammer_db_id} not found."), parse_mode="HTML")
+        return
+
+    await update_scammer_telegram_id(scammer_db_id, telegram_id, scammer.get("username"))
+
+    uname = f"@{scammer.get('username')}" if scammer.get("username") else "—"
+    await update.message.reply_text(
+        em(
+            f"✅ <b>Updated!</b>\n\n"
+            f"Scammer #{scammer_db_id} ({uname})\n"
+            f"🔑 Telegram ID set to: <code>{telegram_id}</code>"
+        ),
+        parse_mode="HTML",
+    )
+
+
 # ── /fixids ───────────────────────────────────────────────────────────────────
 
 @admin_only
