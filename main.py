@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 from telegram import BotCommand, BotCommandScopeAllPrivateChats, BotCommandScopeAllGroupChats
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
-    ChatMemberHandler, filters,
+    ChatMemberHandler, MessageHandler, filters,
 )
 from telegram.request import HTTPXRequest
 
@@ -42,6 +42,7 @@ from bot.handlers.admin        import (
     stats_command,
     fixids_command,
     setid_command,
+    handle_forwarded_message,
 )
 from bot.services.username_refresher import username_refresh_loop
 from bot.services.broadcaster        import on_bot_member_update
@@ -91,6 +92,12 @@ async def run() -> None:
     app.add_handler(CommandHandler("stats",         stats_command))
     app.add_handler(CommandHandler("fixids",        fixids_command))
     app.add_handler(CommandHandler("setid",         setid_command))
+
+    # Forward any message from a scammer → bot auto-resolves their ID
+    app.add_handler(MessageHandler(
+        filters.FORWARDED & filters.ChatType.PRIVATE,
+        handle_forwarded_message,
+    ))
     app.add_handler(CommandHandler("addtrusted",    addtrusted_cmd))
     app.add_handler(CommandHandler("removetrusted", removetrusted_cmd))
     app.add_handler(CommandHandler("listtrusted",   listtrusted_cmd))

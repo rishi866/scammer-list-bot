@@ -322,6 +322,77 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     )
 
 
+# ── Forward message → auto-update ID ─────────────────────────────────────────
+
+async def handle_forwarded_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """When admin forwards any message from a scammer → auto-resolve their ID.
+
+    Works as long as the original sender hasn't hidden their identity in
+    Telegram's privacy settings (Forward Messages privacy).
+    """
+    if update.effective_user.id not in _admin_ids():
+        return
+
+    msg = update.message
+    if not msg:
+        return
+
+    # Extract original sender from forward info (PTB v20+ uses forward_origin)
+    orig_user = None
+
+    # New API (PTB v21 / Bot API 7+)
+    if msg.forward_origin:
+        origin = msg.forward_origin
+        # MessageOriginUser has .sender_user
+        if hasattr(origin, "sender_user") and origin.sender_user:
+            orig_user = origin.sender_user
+    # Legacy fallback
+    if not orig_user and msg.forward_from:
+        orig_user = msg.forward_from
+
+    if not orig_user:
+        # Privacy settings hide the sender — can't resolve
+        return
+
+    fwd_id    = orig_user.id
+    fwd_uname = orig_user.username
+
+    # Search DB by ID or username
+    from bot.db import search_by_telegram_id, search_by_username
+    results = await search_by_telegram_id(fwd_id)
+    if not results and fwd_uname:
+        results = await search_by_username(fwd_uname)
+
+    if not results:
+        # Not in DB — silently ignore (don't spam admin for every forward)
+        return
+
+    updated = []
+    for entry in results:
+        if not entry.get("telegram_id"):
+            await update_scammer_telegram_id(entry["id"], fwd_id, fwd_uname or entry.get("username"))
+            updated.append(entry)
+
+    if not updated:
+        # Already had ID — just confirm
+        uname = f"@{results[0].get('username')}" if results[0].get("username") else "—"
+        await msg.reply_text(
+            em(f"ℹ️ Scammer #{results[0]['id']} ({uname}) already has ID <code>{fwd_id}</code>."),
+            parse_mode="HTML",
+        )
+        return
+
+    lines = []
+    for e in updated:
+        uname = f"@{fwd_uname or e.get('username')}" if (fwd_uname or e.get("username")) else "—"
+        lines.append(f"✅ #{e['id']} {uname} → ID <code>{fwd_id}</code>")
+
+    await msg.reply_text(
+        em(f"🎯 <b>Scammer ID auto-updated!</b>\n\n" + "\n".join(lines)),
+        parse_mode="HTML",
+    )
+
+
 # ── /setid ────────────────────────────────────────────────────────────────────
 
 @admin_only
