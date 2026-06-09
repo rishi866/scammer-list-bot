@@ -13,7 +13,8 @@ PAGE_SIZE = 8
 def _build_page(entries: list[dict], page: int, total: int, total_pages: int) -> tuple[str, InlineKeyboardMarkup | None]:
     SEV_ICON = {"high": "🔴", "medium": "🟡", "low": "🟢"}
     lines = []
-    for e in entries:
+    for idx, e in enumerate(entries):
+        seq_num  = page * PAGE_SIZE + idx + 1   # sequential: 1,2,3,4…
         uname    = f"@{e['username']}" if e.get("username") else "—"
         tid      = f"<code>{e['telegram_id']}</code>" if e.get("telegram_id") else "—"
         history  = [u for u in (e.get("username_history") or []) if u]
@@ -21,9 +22,10 @@ def _build_page(entries: list[dict], page: int, total: int, total_pages: int) ->
         sev      = (e.get("severity") or "medium").lower()
         sev_icon = SEV_ICON.get(sev, "🟡")
         lines.append(em(
-            f"{sev_icon} <b>#{e['id']}</b>  {uname}  ·  🔑 ID: {tid}\n"
+            f"{sev_icon} <b>#{seq_num}</b>  {uname}  ·  🔑 ID: {tid}\n"
             f"   🔄 Old usernames: {old_str}\n"
-            f"   ⚠️ Reason: {(e.get('reason') or '')[:80]}"
+            f"   ⚠️ Reason: {(e.get('reason') or '')[:80]}\n"
+            f"   🗑 <code>/remove {e['id']}</code>"
         ))
 
     header = em(
