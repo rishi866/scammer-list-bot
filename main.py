@@ -142,7 +142,12 @@ async def run() -> None:
     except Exception as e:
         logger.warning("set_my_commands failed: %s", e)
 
-    await app.updater.start_polling(drop_pending_updates=True, allowed_updates=["message", "callback_query", "chat_member", "my_chat_member"])
+    await app.updater.start_polling(
+        drop_pending_updates  = True,
+        allowed_updates       = ["message", "callback_query", "chat_member", "my_chat_member"],
+        poll_interval         = 2.0,   # poll every 2s instead of continuously
+        timeout               = 20,    # long-polling timeout
+    )
     logger.info("Scammer List Bot is live.")
 
     # Background tasks
