@@ -107,12 +107,47 @@ async def _approve(
 
     # Kick scammer from all groups the bot is in
     target_tg_id = report.get("target_id")
+
+    # If ID is missing but username is available, try resolving one more time
+    if not target_tg_id and report.get("target_username"):
+        try:
+            chat         = await context.bot.get_chat(f"@{report['target_username']}")
+            target_tg_id = chat.id
+            # Save resolved ID to DB for future
+            from bot.db import update_scammer_telegram_id
+            await update_scammer_telegram_id(scammer_id, chat.id, chat.username)
+            logger.info("Resolved telegram_id=%s for scammer #%s at approval time", chat.id, scammer_id)
+        except Exception as e:
+            logger.warning("Could not resolve ID for @%s at kick time: %s", report.get("target_username"), e)
+
     if target_tg_id:
         kicked = await _kick_from_all_groups(context.bot, target_tg_id)
-        if kicked:
-            auto_ban = os.getenv("AUTO_BAN", "false").lower() in ("1", "true", "yes")
-            action   = "Banned" if auto_ban else "Kicked"
-            logger.info("%s scammer %s from %d groups after approval", action, target_tg_id, kicked)
+        auto_ban = os.getenv("AUTO_BAN", "false").lower() in ("1", "true", "yes")
+        action   = "🔨 Banned" if auto_ban else "🦵 Kicked"
+        if kicked and group_chat_id:
+            try:
+                await context.bot.send_message(
+                    group_chat_id,
+                    em(f"{action} <b>@{report.get('target_username') or target_tg_id}</b> from {kicked} group(s)."),
+                    parse_mode="HTML",
+                )
+            except Exception:
+                pass
+    else:
+        # Still no ID — warn in the group
+        if group_chat_id and report.get("target_username"):
+            try:
+                await context.bot.send_message(
+                    group_chat_id,
+                    em(
+                        f"⚠️ <b>Could not kick @{report['target_username']}</b>\n"
+                        f"Telegram ID unknown — forward any message from them to me (bot PM) to resolve it.\n"
+                        f"Then use /fixids or I'll auto-capture next time they join a group."
+                    ),
+                    parse_mode="HTML",
+                )
+            except Exception:
+                pass
 
     approver  = f"@{query.from_user.username}" if query.from_user.username else str(query.from_user.id)
     suffix    = em(f"\n\n{sev_icon} <b>Approved ({severity})</b> by {approver} → Scammer #{scammer_id}")
