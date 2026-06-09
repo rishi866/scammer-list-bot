@@ -28,6 +28,7 @@ from bot.handlers.check        import check_command
 from bot.handlers.group_add    import group_add_command
 from bot.handlers.scammer_list import scammer_list_command
 from bot.handlers.report       import build_report_handler
+from bot.handlers.report_forward import build_report_forward_handler
 from bot.handlers.callbacks    import callback_router
 from bot.handlers.emoji_admin  import setemoji_cmd, delemoji_cmd, listemoji_cmd, loadpack_cmd, extractmoji_cmd
 from bot.handlers.trusted      import addtrusted_cmd, removetrusted_cmd, listtrusted_cmd
@@ -80,6 +81,9 @@ async def run() -> None:
     # /report in private → multi-step (goes to approval)
     app.add_handler(build_report_handler())
 
+    # Forward any message in PM → report flow (non-admins) OR id-resolve (admins)
+    app.add_handler(build_report_forward_handler())
+
     # Inline button callbacks (approve/reject/severity + scammer_list pagination)
     app.add_handler(CallbackQueryHandler(callback_router))
 
@@ -95,7 +99,7 @@ async def run() -> None:
     app.add_handler(CommandHandler("setid",         setid_command))
     app.add_handler(CommandHandler("addid",         addid_command))
 
-    # Forward any message from a scammer → bot auto-resolves their ID
+    # Admin forward → resolve ID / quick-add (only for admins, after ConversationHandler)
     app.add_handler(MessageHandler(
         filters.FORWARDED & filters.ChatType.PRIVATE,
         handle_forwarded_message,
