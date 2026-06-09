@@ -190,14 +190,28 @@ def build_add_handler() -> ConversationHandler:
 async def remove_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     args = context.args
     if not args or not args[0].isdigit():
-        await update.message.reply_text("Usage: /remove <id>")
+        await update.message.reply_text("Usage: /remove <number>  (use number from /scammer_list)")
         return
-    sid = int(args[0])
-    ok  = await remove_scammer(sid)
+
+    seq = int(args[0])
+
+    # Look up by sequential position (as shown in /scammer_list)
+    from bot.db import get_scammer_by_seq
+    entry = await get_scammer_by_seq(seq)
+
+    if not entry:
+        await update.message.reply_text(em(f"❌ No scammer at position #{seq}."), parse_mode="HTML")
+        return
+
+    ok = await remove_scammer(entry["id"])
     if ok:
-        await update.message.reply_text(em(f"✅ Scammer #{sid} removed."), parse_mode="HTML")
+        uname = f"@{entry['username']}" if entry.get("username") else f"ID {entry.get('telegram_id') or '—'}"
+        await update.message.reply_text(
+            em(f"✅ <b>#{seq} ({uname}) removed</b> from scammer list."),
+            parse_mode="HTML",
+        )
     else:
-        await update.message.reply_text(em(f"❌ No entry with ID #{sid}."), parse_mode="HTML")
+        await update.message.reply_text(em(f"❌ Could not remove #{seq}."), parse_mode="HTML")
 
 
 # ── /list ─────────────────────────────────────────────────────────────────────

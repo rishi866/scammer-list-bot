@@ -25,7 +25,7 @@ def _build_page(entries: list[dict], page: int, total: int, total_pages: int) ->
             f"{sev_icon} <b>#{seq_num}</b>  {uname}  ·  🔑 ID: {tid}\n"
             f"   🔄 Old usernames: {old_str}\n"
             f"   ⚠️ Reason: {(e.get('reason') or '')[:80]}\n"
-            f"   🗑 <code>/remove {e['id']}</code>"
+            f"   🗑 <code>/remove {seq_num}</code>"
         ))
 
     header = em(

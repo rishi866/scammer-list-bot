@@ -164,6 +164,15 @@ async def get_scammer_by_id(scammer_id: int) -> Optional[dict]:
     return _row(await pool.fetchrow("SELECT * FROM scammers WHERE id = $1", scammer_id))
 
 
+async def get_scammer_by_seq(seq: int) -> Optional[dict]:
+    """Get scammer by 1-based sequential position as shown in /scammer_list."""
+    pool = await _get_pool()
+    return _row(await pool.fetchrow(
+        "SELECT * FROM scammers ORDER BY added_at DESC LIMIT 1 OFFSET $1",
+        seq - 1,
+    ))
+
+
 async def search_by_telegram_id(telegram_id: int) -> list[dict]:
     pool = await _get_pool()
     return _rows(await pool.fetch(
