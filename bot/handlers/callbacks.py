@@ -6,7 +6,8 @@ import logging
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from bot.db import get_report, update_report_status, add_scammer, scammer_exists
+import os
+from bot.db import get_report, update_report_status, add_scammer, scammer_exists, list_active_bot_groups
 from bot.handlers.scammer_list import scammer_list_page_callback
 from bot.services.emoji_fx import em
 from bot.services.broadcaster import broadcast_scammer
@@ -14,6 +15,33 @@ from bot.services.broadcaster import broadcast_scammer
 logger = logging.getLogger(__name__)
 
 SEV_ICON = {"high": "🔴", "medium": "🟡", "low": "🟢"}
+
+
+async def _kick_from_all_groups(bot, telegram_id: int, skip_group_id: int | None = None) -> int:
+    """Kick (or ban if AUTO_BAN=true) scammer from every active group. Returns count."""
+    if not telegram_id:
+        return 0
+
+    groups   = await list_active_bot_groups()
+    auto_ban = os.getenv("AUTO_BAN", "false").lower() in ("1", "true", "yes")
+    kicked   = 0
+
+    for g in groups:
+        gid = g["group_id"]
+        try:
+            await bot.ban_chat_member(gid, telegram_id)
+            if not auto_ban:
+                # Kick only (can rejoin) — ban then immediately unban
+                await bot.unban_chat_member(gid, telegram_id, only_if_banned=True)
+            kicked += 1
+        except Exception as e:
+            logger.debug("Could not kick %s from group %s: %s", telegram_id, gid, e)
+
+    logger.info(
+        "%s scammer %s from %d group(s)",
+        "Banned" if auto_ban else "Kicked", telegram_id, kicked,
+    )
+    return kicked
 
 
 async def _approve(
@@ -76,6 +104,15 @@ async def _approve(
         severity=severity,
         skip_group_id=group_chat_id,
     )
+
+    # Kick scammer from all groups the bot is in
+    target_tg_id = report.get("target_id")
+    if target_tg_id:
+        kicked = await _kick_from_all_groups(context.bot, target_tg_id)
+        if kicked:
+            auto_ban = os.getenv("AUTO_BAN", "false").lower() in ("1", "true", "yes")
+            action   = "Banned" if auto_ban else "Kicked"
+            logger.info("%s scammer %s from %d groups after approval", action, target_tg_id, kicked)
 
     approver  = f"@{query.from_user.username}" if query.from_user.username else str(query.from_user.id)
     suffix    = em(f"\n\n{sev_icon} <b>Approved ({severity})</b> by {approver} → Scammer #{scammer_id}")

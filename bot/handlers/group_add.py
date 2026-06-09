@@ -141,6 +141,11 @@ async def group_add_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             context.bot, scammer_id, target_username, target_id, reason,
             severity="medium", skip_group_id=group.id
         )
+
+        # Kick from all groups
+        if target_id:
+            from bot.handlers.callbacks import _kick_from_all_groups
+            await _kick_from_all_groups(context.bot, target_id)
         return
 
     # --- Build admin DM notification + severity keyboard -------------------
