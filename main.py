@@ -43,7 +43,6 @@ from bot.handlers.admin        import (
     stats_command,
     fixids_command,
     setid_command,
-    addid_command,
 )
 from bot.services.username_refresher import username_refresh_loop
 from bot.services.broadcaster        import on_bot_member_update
@@ -96,7 +95,7 @@ async def run() -> None:
     app.add_handler(CommandHandler("stats",         stats_command))
     app.add_handler(CommandHandler("fixids",        fixids_command))
     app.add_handler(CommandHandler("setid",         setid_command))
-    app.add_handler(CommandHandler("addid",         addid_command))
+    # /addid is registered in register_forward_handlers (handles both admin+user)
 
     app.add_handler(CommandHandler("addtrusted",    addtrusted_cmd))
     app.add_handler(CommandHandler("removetrusted", removetrusted_cmd))
