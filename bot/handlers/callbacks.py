@@ -245,6 +245,16 @@ async def _quickadd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "Added via forward", severity="medium",
     )
 
+    # Kick from all groups immediately
+    kicked   = await _kick_from_all_groups(context.bot, tg_id)
+    auto_ban = os.getenv("AUTO_BAN", "false").lower() in ("1", "true", "yes")
+    action   = "🔨 Banned" if auto_ban else "🦵 Kicked"
+    if kicked:
+        await query.message.reply_text(
+            em(f"{action} <b>{uname_str or tg_id}</b> from {kicked} group(s)."),
+            parse_mode="HTML",
+        )
+
 
 async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query

@@ -482,8 +482,20 @@ async def addid_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         severity    = "medium",
     )
 
-    uname_str = f"@{username}" if username else "— (will update when bot sees them)"
-    fetch_note = "✅ Fetched from Telegram" if fetched else "⚠️ Could not fetch now — will auto-update later"
+    # Kick from all groups immediately
+    from bot.handlers.callbacks import _kick_from_all_groups
+    from bot.services.broadcaster import broadcast_scammer
+    import os as _os
+
+    kicked = await _kick_from_all_groups(context.bot, telegram_id)
+    auto_ban = _os.getenv("AUTO_BAN", "false").lower() in ("1", "true", "yes")
+    action   = "🔨 Banned" if auto_ban else "🦵 Kicked"
+    kick_line = f"\n{action} from <b>{kicked}</b> group(s)." if kicked else "\n⚠️ Not found in any active group."
+
+    await broadcast_scammer(context.bot, scammer_id, username, telegram_id, reason, severity="medium")
+
+    uname_str  = f"@{username}" if username else "— (will update when bot sees them)"
+    fetch_note = "✅ Fetched from Telegram" if fetched else "⚠️ Could not fetch — will auto-update later"
 
     await update.message.reply_text(
         em(
@@ -494,6 +506,7 @@ async def addid_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             f"⚠️ Reason      : {reason}\n\n"
             f"{fetch_note}\n"
             f"🔄 Username will auto-refresh every 6 hours."
+            f"{kick_line}"
         ),
         parse_mode="HTML",
     )
