@@ -82,6 +82,35 @@ async def fwd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         )
         return ConversationHandler.END
 
+    # Check if already in scammer list
+    from bot.db import search_by_telegram_id, search_by_username
+    existing = await search_by_telegram_id(fwd_id)
+    if not existing and fwd_uname:
+        existing = await search_by_username(fwd_uname)
+
+    if existing:
+        e        = existing[0]
+        sev      = (e.get("severity") or "medium").lower()
+        sev_icon = {"high": "🔴", "medium": "🟡", "low": "🟢"}.get(sev, "🟡")
+        uname    = f"@{e['username']}" if e.get("username") else "—"
+        history  = [u for u in (e.get("username_history") or []) if u]
+        hist_str = ", ".join(f"@{u}" for u in history) if history else "—"
+
+        await msg.reply_text(
+            em(
+                f"🚨 <b>This person is already a confirmed scammer!</b>\n\n"
+                f"📋 Listed as: <b>Scammer #{e['id']}</b>\n"
+                f"📝 Username : {uname}\n"
+                f"🔑 Tele ID  : <code>{e.get('telegram_id') or '—'}</code>\n"
+                f"{sev_icon} Severity  : {sev.capitalize()}\n"
+                f"⚠️ Reason   : {e['reason']}\n"
+                f"🔄 Past usernames: {hist_str}\n\n"
+                f"✅ Already in the database. No need to report again."
+            ),
+            parse_mode="HTML",
+        )
+        return ConversationHandler.END
+
     # Save to context
     context.user_data["fwd_id"]    = fwd_id
     context.user_data["fwd_uname"] = fwd_uname
