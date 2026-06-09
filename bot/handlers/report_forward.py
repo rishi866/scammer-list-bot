@@ -24,7 +24,8 @@ logger = logging.getLogger(__name__)
 
 # Conversation states
 FWD_REASON = 1
-FWD_PROOF  = 2
+FWD_ID     = 2
+FWD_PROOF  = 3
 
 
 def _admin_ids() -> list[int]:
@@ -114,17 +115,62 @@ async def fwd_reason(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
     context.user_data["fwd_reason"] = reason
 
+    # If we already got the ID from forward metadata, skip asking
+    if context.user_data.get("fwd_id"):
+        existing_id = context.user_data["fwd_id"]
+        await update.message.reply_text(
+            em(
+                f"🔑 Telegram ID already detected: <code>{existing_id}</code>\n\n"
+                f"If you know a <b>different/correct</b> ID, send it now.\n"
+                f"Otherwise send /skip to continue."
+            ),
+            parse_mode="HTML",
+        )
+    else:
+        await update.message.reply_text(
+            em(
+                "🔑 <b>What is their Telegram ID?</b>\n\n"
+                "You can find it by forwarding their message to @userinfobot\n"
+                "Send the number (e.g. <code>5886335494</code>), or /skip if you don't know."
+            ),
+            parse_mode="HTML",
+        )
+    return FWD_ID
+
+
+# ── Step 3: User provides (or skips) Telegram ID ────────────────────────────
+
+async def fwd_id_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """User sent a Telegram ID number."""
+    text = update.message.text.strip()
+    if not text.isdigit():
+        await update.message.reply_text(
+            em("⚠️ Please send a valid numeric Telegram ID, or /skip to continue.")
+        )
+        return FWD_ID
+
+    context.user_data["fwd_id"] = int(text)
     await update.message.reply_text(
-        em(
-            "📸 <b>Send proof</b> (screenshot, photo, video).\n\n"
-            "If you have no proof, send /skip to submit without it."
-        ),
+        em(f"✅ ID saved: <code>{text}</code>"),
+        parse_mode="HTML",
+    )
+    await update.message.reply_text(
+        em("📸 <b>Send proof</b> (screenshot, photo, video).\n\nNo proof? Send /skip"),
         parse_mode="HTML",
     )
     return FWD_PROOF
 
 
-# ── Step 3a: User sends photo proof ──────────────────────────────────────────
+async def fwd_id_skip(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """User skipped the ID step."""
+    await update.message.reply_text(
+        em("📸 <b>Send proof</b> (screenshot, photo, video).\n\nNo proof? Send /skip"),
+        parse_mode="HTML",
+    )
+    return FWD_PROOF
+
+
+# ── Step 4a: User sends photo proof ──────────────────────────────────────────
 
 async def fwd_proof_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     photo = update.message.photo[-1] if update.message.photo else None
@@ -144,7 +190,7 @@ async def fwd_proof_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     return await _send_to_admins(update, context)
 
 
-# ── Step 3b: User skips proof ─────────────────────────────────────────────────
+# ── Step 4b: User skips proof ─────────────────────────────────────────────────
 
 async def fwd_skip_proof(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["fwd_proof_file_id"]  = None
@@ -265,6 +311,10 @@ def build_report_forward_handler() -> ConversationHandler:
         states={
             FWD_REASON: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, fwd_reason),
+            ],
+            FWD_ID: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, fwd_id_received),
+                CommandHandler("skip", fwd_id_skip),
             ],
             FWD_PROOF: [
                 MessageHandler(filters.PHOTO | filters.Document.ALL, fwd_proof_photo),
