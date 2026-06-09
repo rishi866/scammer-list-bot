@@ -351,7 +351,19 @@ async def handle_forwarded_message(update: Update, context: ContextTypes.DEFAULT
         orig_user = msg.forward_from
 
     if not orig_user:
-        # Privacy settings hide the sender — can't resolve
+        # Privacy settings hide the sender — tell admin what to do
+        await msg.reply_text(
+            em(
+                "⚠️ <b>Could not identify the sender.</b>\n\n"
+                "Their <b>Forward Privacy</b> is enabled — Telegram hides their identity.\n\n"
+                "<b>How to get their ID:</b>\n"
+                "1️⃣ Forward their message to @userinfobot → it will show their ID\n"
+                "2️⃣ Then use: /addid &lt;telegram_id&gt; &lt;reason&gt;\n\n"
+                "Or if you know their @username:\n"
+                "/addid @username reason"
+            ),
+            parse_mode="HTML",
+        )
         return
 
     fwd_id    = orig_user.id
