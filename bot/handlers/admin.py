@@ -23,6 +23,9 @@ from bot.db import (
     count_reports,
     get_scammers_missing_id,
     update_scammer_telegram_id,
+    scammer_exists,
+    search_by_telegram_id,
+    search_by_username,
 )
 from bot.services.emoji_fx import em
 
