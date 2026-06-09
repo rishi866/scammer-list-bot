@@ -87,7 +87,7 @@ async def listemoji_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await update.message.reply_text("No emoji mappings configured yet.\nUse /setemoji or /loadpack.")
         return
 
-    # Bot ke specific emojis check karo
+    # Check which bot-specific emojis are mapped vs missing
     BOT_EMOJIS = ["✨","🔍","📝","📋","📨","ℹ️","✅","❌","⚠️","🔴","🟡","🟢",
                   "👤","🔑","🔄","📅","🔗","📌","📤","📊","🚨","🛡","🏆","🎉"]
     mapped_set = {it.get("fallback","") for it in items}
