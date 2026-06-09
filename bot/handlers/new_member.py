@@ -82,16 +82,20 @@ async def on_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         logger.warning("Could not send join alert in %s: %s", chat.id, err)
         return
 
-    # Auto-ban if enabled
+    # Always kick — permanent ban only if AUTO_BAN=true
     auto_ban = os.getenv("AUTO_BAN", "false").lower() in ("1", "true", "yes")
-    if auto_ban:
-        try:
-            await context.bot.ban_chat_member(chat.id, user.id)
-            await context.bot.send_message(
-                chat.id,
-                em(f"🔨 <b>Auto-banned</b> scammer #{e['id']} ({uname})."),
-                parse_mode="HTML",
-            )
-            logger.info("Auto-banned scammer %s from group %s", user.id, chat.id)
-        except TelegramError as err:
-            logger.warning("Auto-ban failed for %s in %s: %s", user.id, chat.id, err)
+    try:
+        await context.bot.ban_chat_member(chat.id, user.id)
+        if not auto_ban:
+            # Kick only (can rejoin manually, but removed now)
+            await context.bot.unban_chat_member(chat.id, user.id, only_if_banned=True)
+        action = "🔨 <b>Auto-banned</b>" if auto_ban else "🦵 <b>Auto-kicked</b>"
+        await context.bot.send_message(
+            chat.id,
+            em(f"{action} scammer #{e['id']} ({uname})."),
+            parse_mode="HTML",
+        )
+        logger.info("Auto-%s scammer %s from group %s",
+                    "banned" if auto_ban else "kicked", user.id, chat.id)
+    except TelegramError as err:
+        logger.warning("Auto-kick failed for %s in %s: %s", user.id, chat.id, err)
