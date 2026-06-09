@@ -99,13 +99,11 @@ async def run() -> None:
     app.add_handler(CommandHandler("setid",         setid_command))
     app.add_handler(CommandHandler("addid",         addid_command))
 
-    # Admin forward → resolve ID / quick-add
-    # Must be in group=1 so it runs AFTER the ConversationHandler (group=0)
-    # ConversationHandler returns END for admins, then group=1 handles it
+    # Admin forward → resolve ID / quick-add (admins filtered OUT of ConversationHandler above)
     app.add_handler(MessageHandler(
         filters.FORWARDED & filters.ChatType.PRIVATE,
         handle_forwarded_message,
-    ), group=1)
+    ))
     app.add_handler(CommandHandler("addtrusted",    addtrusted_cmd))
     app.add_handler(CommandHandler("removetrusted", removetrusted_cmd))
     app.add_handler(CommandHandler("listtrusted",   listtrusted_cmd))

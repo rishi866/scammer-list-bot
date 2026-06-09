@@ -28,12 +28,18 @@ FWD_ID     = 2
 FWD_PROOF  = 3
 
 
-def _admin_ids() -> list[int]:
-    return [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().isdigit()]
+def _admin_ids() -> set[int]:
+    return {int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().isdigit()}
 
 
-def _is_admin(user_id: int) -> bool:
-    return user_id in set(_admin_ids())
+class _NonAdminFilter(filters.MessageFilter):
+    """Matches messages from non-admin users only."""
+    def filter(self, message):
+        uid = message.from_user.id if message.from_user else 0
+        return uid not in _admin_ids()
+
+
+NON_ADMIN = _NonAdminFilter()
 
 
 def _extract_forward_user(msg):
@@ -62,10 +68,6 @@ def _extract_forward_user(msg):
 async def fwd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Triggered when a non-admin user forwards any message in PM."""
     msg = update.message
-
-    # Admins have their own forward handler — skip here
-    if _is_admin(update.effective_user.id):
-        return ConversationHandler.END
 
     fwd_id, fwd_uname, fwd_name = _extract_forward_user(msg)
 
@@ -333,7 +335,7 @@ def build_report_forward_handler() -> ConversationHandler:
     return ConversationHandler(
         entry_points=[
             MessageHandler(
-                filters.FORWARDED & filters.ChatType.PRIVATE,
+                filters.FORWARDED & filters.ChatType.PRIVATE & NON_ADMIN,
                 fwd_start,
             )
         ],
