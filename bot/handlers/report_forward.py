@@ -151,7 +151,37 @@ async def on_addid_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         )
         return
 
-    # ── NON-ADMIN: save state, ask for proof ─────────────────────────────────
+    # ── NON-ADMIN ─────────────────────────────────────────────────────────────
+    chat_type = update.effective_chat.type
+
+    if chat_type in ("group", "supergroup"):
+        # GROUP: one-shot report (no multi-step, groups don't support it cleanly)
+        from bot.db import add_report
+        report_id = await add_report(
+            reporter_id      = uid,
+            reporter_username= update.effective_user.username,
+            target_id        = telegram_id,
+            target_username  = username,
+            target_full_name = full_name,
+            reason           = reason,
+            proof            = None,
+            group_chat_id    = update.effective_chat.id,
+            proof_file_id    = None,
+        )
+        await _notify_admins(context, report_id, telegram_id, username, full_name,
+                             reason, update.effective_user, None, source="/addid group")
+        await update.message.reply_text(
+            em(
+                f"✅ <b>Report #{report_id} submitted!</b>\n\n"
+                f"🔑 ID: <code>{telegram_id}</code>  📝 {uname_str}\n"
+                f"⚠️ Reason: {reason}\n\n"
+                f"Admin will review shortly. 🙏"
+            ),
+            parse_mode="HTML",
+        )
+        return
+
+    # PRIVATE: save state, ask for proof
     ud = context.user_data
     ud[_STATE]  = S_ADDID_PROOF
     ud[_ID]     = telegram_id
@@ -498,12 +528,150 @@ async def _notify_admins(context, report_id, tg_id, uname, name, reason,
             logger.warning("Could not notify admin %s: %s", aid, exc)
 
 
+# ── Group: forward check ─────────────────────────────────────────────────────
+
+async def on_forward_group(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Forward in group → check DB, show result or suggest how to report."""
+    msg = update.message
+    uid = update.effective_user.id
+
+    fwd_id, fwd_uname, fwd_name = _extract_fwd_user(msg)
+
+    from bot.db import search_by_telegram_id, search_by_username
+
+    if fwd_id:
+        existing = await search_by_telegram_id(fwd_id)
+        if not existing and fwd_uname:
+            existing = await search_by_username(fwd_uname)
+
+        if existing:
+            e        = existing[0]
+            sev      = (e.get("severity") or "medium").lower()
+            sev_icon = {"high": "🔴", "medium": "🟡", "low": "🟢"}.get(sev, "🟡")
+            uname    = f"@{e['username']}" if e.get("username") else "—"
+            await msg.reply_text(
+                em(
+                    f"🚨 <b>Known Scammer!</b>\n\n"
+                    f"📝 Username : {uname}\n"
+                    f"🔑 Tele ID  : <code>{e.get('telegram_id') or '—'}</code>\n"
+                    f"{sev_icon} Severity  : {sev.capitalize()}\n"
+                    f"⚠️ Reason   : {e['reason']}"
+                ),
+                parse_mode="HTML",
+            )
+        else:
+            uname_str = f"@{fwd_uname}" if fwd_uname else "—"
+            await msg.reply_text(
+                em(
+                    f"ℹ️ <b>Not in scammer list</b>\n\n"
+                    f"👤 Name : <b>{fwd_name}</b>\n"
+                    f"📝 Username : {uname_str}\n"
+                    f"🔑 Tele ID : <code>{fwd_id}</code>\n\n"
+                    f"To report: <code>/addid {fwd_id} &lt;reason&gt;</code>"
+                ),
+                parse_mode="HTML",
+            )
+    else:
+        await msg.reply_text(
+            em(
+                "⚠️ <b>Could not identify the sender</b> (privacy enabled).\n\n"
+                "If you know their username:\n"
+                "<code>/add @username reason</code>\n\n"
+                "If you know their Telegram ID:\n"
+                "<code>/addid &lt;id&gt; reason</code>"
+            ),
+            parse_mode="HTML",
+        )
+
+
+# ── Group: /report @username [reason] ────────────────────────────────────────
+
+async def on_report_group(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/report @username [reason]  OR  /report <telegram_id> [reason]  in a group."""
+    msg  = update.message
+    uid  = update.effective_user.id
+    args = context.args
+
+    if not args:
+        await msg.reply_text(
+            em(
+                "📋 <b>Usage in group:</b>\n"
+                "<code>/report @username reason</code>\n"
+                "<code>/report &lt;telegram_id&gt; reason</code>\n\n"
+                "For full report with proof, use bot PM."
+            ),
+            parse_mode="HTML",
+        )
+        return
+
+    target = args[0].lstrip("@")
+    reason = " ".join(args[1:]).strip() if len(args) > 1 else "No reason provided"
+
+    tg_id    = int(target) if target.isdigit() else None
+    username = None if target.isdigit() else target
+
+    # Try to resolve from Telegram
+    full_name = "Unknown"
+    try:
+        lookup = tg_id if tg_id else f"@{username}"
+        chat   = await context.bot.get_chat(lookup)
+        tg_id  = chat.id
+        username = chat.username or username
+        full_name = " ".join(filter(None, [chat.first_name, chat.last_name])) or "Unknown"
+    except Exception:
+        pass
+
+    # Duplicate check
+    from bot.db import scammer_exists
+    dup = await scammer_exists(tg_id, username)
+    if dup:
+        uname_d = f"@{dup.get('username')}" if dup.get("username") else "—"
+        await msg.reply_text(
+            em(f"⚠️ <b>Already listed as #{dup['id']}</b> ({uname_d})."),
+            parse_mode="HTML",
+        )
+        return
+
+    from bot.db import add_report
+    report_id = await add_report(
+        reporter_id      = uid,
+        reporter_username= update.effective_user.username,
+        target_id        = tg_id,
+        target_username  = username,
+        target_full_name = full_name,
+        reason           = reason,
+        proof            = None,
+        group_chat_id    = update.effective_chat.id,
+        proof_file_id    = None,
+    )
+
+    await _notify_admins(context, report_id, tg_id, username, full_name,
+                         reason, update.effective_user, None, source="/report group")
+
+    uname_str = f"@{username}" if username else f"ID {tg_id or '—'}"
+    await msg.reply_text(
+        em(f"✅ <b>Report #{report_id} submitted!</b> ({uname_str})\nAdmin will review shortly. 🙏"),
+        parse_mode="HTML",
+    )
+
+
 # ── Register handlers ─────────────────────────────────────────────────────────
 
 def register(app) -> None:
-    """Register all forward + /addid handlers on the Application."""
-    app.add_handler(CommandHandler("addid",  on_addid_command))
+    """Register all forward + /addid + group report handlers."""
+    # /addid works in both PM and groups (different flow per chat type)
+    app.add_handler(CommandHandler("addid", on_addid_command))
+
+    # /report in GROUP (one-shot) — registered before build_report_handler (PM multi-step)
+    app.add_handler(CommandHandler("report", on_report_group, filters=filters.ChatType.GROUPS))
+
+    # Forward in GROUP → DB check / suggest
+    app.add_handler(MessageHandler(filters.FORWARDED & filters.ChatType.GROUPS, on_forward_group))
+
+    # Forward in PM → full multi-step flow
     app.add_handler(MessageHandler(filters.FORWARDED & filters.ChatType.PRIVATE, on_forward))
+
+    # PM conversation steps
     app.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.PHOTO, on_photo))
     app.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, on_text))
     app.add_handler(CommandHandler("skip",   on_skip))

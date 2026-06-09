@@ -117,7 +117,9 @@ async def run() -> None:
 
     # ── Bot command menus ─────────────────────────────────────────────────────
     group_cmds = [
-        BotCommand("add",          "Submit a scammer for admin review"),
+        BotCommand("add",          "Report scammer: /add @username reason"),
+        BotCommand("addid",        "Report by Telegram ID: /addid <id> reason"),
+        BotCommand("report",       "Report scammer: /report @username reason"),
         BotCommand("check",        "Check if someone is a known scammer"),
         BotCommand("scammer_list", "View all confirmed scammers"),
     ]

@@ -116,7 +116,7 @@ async def report_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
 def build_report_handler() -> ConversationHandler:
     return ConversationHandler(
-        entry_points=[CommandHandler("report", report_start)],
+        entry_points=[CommandHandler("report", report_start, filters=filters.ChatType.PRIVATE)],
         states={
             TARGET: [MessageHandler(filters.TEXT & ~filters.COMMAND, report_target)],
             REASON: [MessageHandler(filters.TEXT & ~filters.COMMAND, report_reason)],
