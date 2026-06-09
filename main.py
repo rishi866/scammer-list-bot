@@ -28,7 +28,7 @@ from bot.handlers.check        import check_command
 from bot.handlers.group_add    import group_add_command
 from bot.handlers.scammer_list import scammer_list_command
 from bot.handlers.report       import build_report_handler
-from bot.handlers.report_forward import build_report_forward_handler
+from bot.handlers.report_forward import register as register_forward_handlers
 from bot.handlers.callbacks    import callback_router
 from bot.handlers.emoji_admin  import setemoji_cmd, delemoji_cmd, listemoji_cmd, loadpack_cmd, extractmoji_cmd
 from bot.handlers.trusted      import addtrusted_cmd, removetrusted_cmd, listtrusted_cmd
@@ -44,7 +44,6 @@ from bot.handlers.admin        import (
     fixids_command,
     setid_command,
     addid_command,
-    handle_forwarded_message,
 )
 from bot.services.username_refresher import username_refresh_loop
 from bot.services.broadcaster        import on_bot_member_update
@@ -81,8 +80,8 @@ async def run() -> None:
     # /report in private → multi-step (goes to approval)
     app.add_handler(build_report_handler())
 
-    # Forward any message in PM → report flow (non-admins) OR id-resolve (admins)
-    app.add_handler(build_report_forward_handler())
+    # Forward any message in PM → unified handler (admin: resolve/quick-add, user: report flow)
+    register_forward_handlers(app)
 
     # Inline button callbacks (approve/reject/severity + scammer_list pagination)
     app.add_handler(CallbackQueryHandler(callback_router))
@@ -99,11 +98,6 @@ async def run() -> None:
     app.add_handler(CommandHandler("setid",         setid_command))
     app.add_handler(CommandHandler("addid",         addid_command))
 
-    # Admin forward → resolve ID / quick-add (admins filtered OUT of ConversationHandler above)
-    app.add_handler(MessageHandler(
-        filters.FORWARDED & filters.ChatType.PRIVATE,
-        handle_forwarded_message,
-    ))
     app.add_handler(CommandHandler("addtrusted",    addtrusted_cmd))
     app.add_handler(CommandHandler("removetrusted", removetrusted_cmd))
     app.add_handler(CommandHandler("listtrusted",   listtrusted_cmd))

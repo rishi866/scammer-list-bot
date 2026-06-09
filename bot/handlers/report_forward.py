@@ -1,11 +1,9 @@
-"""Report flow triggered by forwarding a message to the bot.
+"""Forward-message handler — works for both admins and regular users.
 
-Any user (from any group, bot not required there) can:
-  1. Forward a message from a suspected scammer to this bot
-  2. Bot collects reason + optional proof photo
-  3. Bot sends full report to admins with [Add as Scammer] / [Ignore] buttons
+Admin forwards   → show sender info + [➕ Add as Scammer] button
+Regular forwards → multi-step report: reason → ID → proof → admin DM
 
-This keeps admin's personal account private and works from any group.
+State is tracked manually via context.user_data (no ConversationHandler needed).
 """
 from __future__ import annotations
 
@@ -13,78 +11,133 @@ import logging
 import os
 
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
-from telegram.ext import (
-    ContextTypes, ConversationHandler,
-    MessageHandler, CommandHandler, filters,
-)
+from telegram.ext import ContextTypes, MessageHandler, CommandHandler, filters
 
 from bot.services.emoji_fx import em
 
 logger = logging.getLogger(__name__)
 
-# Conversation states
-FWD_REASON = 1
-FWD_ID     = 2
-FWD_PROOF  = 3
+# user_data keys
+_STATE  = "fwd_state"
+_ID     = "fwd_id"
+_UNAME  = "fwd_uname"
+_NAME   = "fwd_name"
+_REASON = "fwd_reason"
+
+# States
+S_REASON = "reason"
+S_ID     = "id"
+S_PROOF  = "proof"
 
 
 def _admin_ids() -> set[int]:
     return {int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().isdigit()}
 
 
-class _NonAdminFilter(filters.MessageFilter):
-    """Matches messages from non-admin users only."""
-    def filter(self, message):
-        uid = message.from_user.id if message.from_user else 0
-        return uid not in _admin_ids()
+def _is_admin(uid: int) -> bool:
+    return uid in _admin_ids()
 
 
-NON_ADMIN = _NonAdminFilter()
-
-
-def _extract_forward_user(msg):
-    """Extract (user_id, username, full_name) from a forwarded message."""
-    orig_user = None
-
-    if msg.forward_origin:
-        origin = msg.forward_origin
-        if hasattr(origin, "sender_user") and origin.sender_user:
-            orig_user = origin.sender_user
-
-    if not orig_user and msg.forward_from:
-        orig_user = msg.forward_from
-
-    if not orig_user:
+def _extract_fwd_user(msg):
+    orig = None
+    if msg.forward_origin and hasattr(msg.forward_origin, "sender_user"):
+        orig = msg.forward_origin.sender_user
+    if not orig and msg.forward_from:
+        orig = msg.forward_from
+    if not orig:
         return None, None, None
-
-    fwd_id    = orig_user.id
-    fwd_uname = orig_user.username
-    fwd_name  = " ".join(filter(None, [orig_user.first_name, orig_user.last_name])) or "Unknown"
-    return fwd_id, fwd_uname, fwd_name
+    name = " ".join(filter(None, [orig.first_name, orig.last_name])) or "Unknown"
+    return orig.id, orig.username, name
 
 
-# ── Step 1: User forwards a message ──────────────────────────────────────────
+def _clear(ud: dict) -> None:
+    for k in [_STATE, _ID, _UNAME, _NAME, _REASON]:
+        ud.pop(k, None)
 
-async def fwd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Triggered when a non-admin user forwards any message in PM."""
+
+# ── Main entry: forwarded message received ───────────────────────────────────
+
+async def on_forward(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg = update.message
+    uid = update.effective_user.id
+    ud  = context.user_data
 
-    fwd_id, fwd_uname, fwd_name = _extract_forward_user(msg)
+    fwd_id, fwd_uname, fwd_name = _extract_fwd_user(msg)
+
+    # ── ADMIN FLOW ──────────────────────────────────────────────────────────
+    if _is_admin(uid):
+        if not fwd_id:
+            await msg.reply_text(
+                em(
+                    "⚠️ <b>Could not identify the sender.</b>\n\n"
+                    "Their <b>Forward Privacy</b> is enabled — Telegram hides their identity.\n\n"
+                    "<b>To add them manually:</b>\n"
+                    "• Forward their message to @userinfobot → get their ID\n"
+                    "• Then: /addid &lt;id&gt; &lt;reason&gt;\n\n"
+                    "Or if you know their @username:\n"
+                    "/addid @username reason"
+                ),
+                parse_mode="HTML",
+            )
+            return
+
+        from bot.db import search_by_telegram_id, search_by_username, update_scammer_telegram_id
+        existing = await search_by_telegram_id(fwd_id)
+        if not existing and fwd_uname:
+            existing = await search_by_username(fwd_uname)
+
+        uname_str = f"@{fwd_uname}" if fwd_uname else "—"
+
+        if existing:
+            e = existing[0]
+            # Update ID if missing
+            if not e.get("telegram_id"):
+                await update_scammer_telegram_id(e["id"], fwd_id, fwd_uname)
+                await msg.reply_text(
+                    em(f"✅ Telegram ID saved for Scammer #{e['id']} ({uname_str}): <code>{fwd_id}</code>"),
+                    parse_mode="HTML",
+                )
+            else:
+                await msg.reply_text(
+                    em(
+                        f"ℹ️ <b>Already listed as Scammer #{e['id']}</b>\n"
+                        f"📝 Username : {uname_str}\n"
+                        f"🔑 Tele ID  : <code>{fwd_id}</code>\n"
+                        f"⚠️ Reason   : {e['reason']}"
+                    ),
+                    parse_mode="HTML",
+                )
+        else:
+            keyboard = InlineKeyboardMarkup([[
+                InlineKeyboardButton("➕ Add as Scammer", callback_data=f"quickadd:{fwd_id}:{fwd_uname or ''}")
+            ]])
+            await msg.reply_text(
+                em(
+                    f"ℹ️ <b>Not in scammer list</b>\n\n"
+                    f"👤 Name     : <b>{fwd_name}</b>\n"
+                    f"📝 Username : {uname_str}\n"
+                    f"🔑 Tele ID  : <code>{fwd_id}</code>\n\n"
+                    f"Want to add them as a scammer?"
+                ),
+                parse_mode="HTML",
+                reply_markup=keyboard,
+            )
+        return
+
+    # ── NON-ADMIN FLOW ──────────────────────────────────────────────────────
 
     if not fwd_id:
-        # Privacy enabled — sender hidden
         await msg.reply_text(
             em(
                 "⚠️ <b>Could not identify the sender.</b>\n\n"
-                "The person has their <b>Forward Privacy</b> enabled in Telegram settings, "
-                "so their identity is hidden.\n\n"
+                "Their <b>Forward Privacy</b> is enabled.\n\n"
                 "Please use /report and enter their @username manually."
             ),
             parse_mode="HTML",
         )
-        return ConversationHandler.END
+        return
 
-    # Check if already in scammer list
+    # Check if already listed
     from bot.db import search_by_telegram_id, search_by_username
     existing = await search_by_telegram_id(fwd_id)
     if not existing and fwd_uname:
@@ -97,154 +150,141 @@ async def fwd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         uname    = f"@{e['username']}" if e.get("username") else "—"
         history  = [u for u in (e.get("username_history") or []) if u]
         hist_str = ", ".join(f"@{u}" for u in history) if history else "—"
-
         await msg.reply_text(
             em(
-                f"🚨 <b>This person is already a confirmed scammer!</b>\n\n"
-                f"📋 Listed as: <b>Scammer #{e['id']}</b>\n"
+                f"🚨 <b>Already a confirmed scammer!</b>\n\n"
+                f"📋 Scammer #{e['id']}\n"
                 f"📝 Username : {uname}\n"
                 f"🔑 Tele ID  : <code>{e.get('telegram_id') or '—'}</code>\n"
                 f"{sev_icon} Severity  : {sev.capitalize()}\n"
                 f"⚠️ Reason   : {e['reason']}\n"
-                f"🔄 Past usernames: {hist_str}\n\n"
-                f"✅ Already in the database. No need to report again."
+                f"🔄 Past usernames: {hist_str}"
             ),
             parse_mode="HTML",
         )
-        return ConversationHandler.END
+        return
 
-    # Save to context
-    context.user_data["fwd_id"]    = fwd_id
-    context.user_data["fwd_uname"] = fwd_uname
-    context.user_data["fwd_name"]  = fwd_name
+    # Start report flow
+    ud[_STATE] = S_REASON
+    ud[_ID]    = fwd_id
+    ud[_UNAME] = fwd_uname
+    ud[_NAME]  = fwd_name
 
     uname_str = f"@{fwd_uname}" if fwd_uname else "—"
     await msg.reply_text(
         em(
             f"📨 <b>Report Submission</b>\n\n"
-            f"You're reporting:\n"
+            f"Reporting:\n"
             f"  👤 Name     : <b>{fwd_name}</b>\n"
             f"  📝 Username : {uname_str}\n"
             f"  🔑 Tele ID  : <code>{fwd_id}</code>\n\n"
-            f"⚠️ <b>What did this person do?</b>\n"
-            f"Please describe the scam/fraud in detail:"
+            f"⚠️ <b>What did this person do?</b> Describe briefly:\n"
+            f"(/cancel to abort)"
         ),
         parse_mode="HTML",
     )
-    return FWD_REASON
 
 
-# ── Step 2: User gives reason ─────────────────────────────────────────────────
+# ── Non-admin text message handler (conversation steps) ──────────────────────
 
-async def fwd_reason(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    reason = update.message.text.strip()
-    if len(reason) < 5:
-        await update.message.reply_text(
-            em("⚠️ Please give a more detailed reason (at least 5 characters).")
-        )
-        return FWD_REASON
+async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    uid = update.effective_user.id
+    if _is_admin(uid):
+        return  # admins not in this flow
 
-    context.user_data["fwd_reason"] = reason
+    ud    = context.user_data
+    state = ud.get(_STATE)
+    if not state:
+        return
 
-    # If we already got the ID from forward metadata, skip asking
-    if context.user_data.get("fwd_id"):
-        existing_id = context.user_data["fwd_id"]
+    text = update.message.text.strip()
+
+    if state == S_REASON:
+        if len(text) < 5:
+            await update.message.reply_text("⚠️ Please give more detail (min 5 chars).")
+            return
+        ud[_REASON] = text
+        ud[_STATE]  = S_ID
+        existing_id = ud.get(_ID)
         await update.message.reply_text(
             em(
                 f"🔑 Telegram ID already detected: <code>{existing_id}</code>\n\n"
-                f"If you know a <b>different/correct</b> ID, send it now.\n"
-                f"Otherwise send /skip to continue."
+                f"If you know a different/correct ID, send it now.\n"
+                f"Otherwise send /skip to continue.\n\n"
+                f"Or send their @username if ID is unknown."
             ),
             parse_mode="HTML",
         )
-    else:
+
+    elif state == S_ID:
+        if text.lstrip("@").isdigit():
+            ud[_ID] = int(text.lstrip("@"))
+        elif text.startswith("@"):
+            ud[_UNAME] = text.lstrip("@")
+        ud[_STATE] = S_PROOF
         await update.message.reply_text(
-            em(
-                "🔑 <b>What is their Telegram ID?</b>\n\n"
-                "You can find it by forwarding their message to @userinfobot\n"
-                "Send the number (e.g. <code>5886335494</code>), or /skip if you don't know."
-            ),
+            em("📸 <b>Send proof</b> (screenshot/photo). No proof? Send /skip"),
             parse_mode="HTML",
         )
-    return FWD_ID
+
+    elif state == S_PROOF:
+        await _finish_report(update, context, proof_file_id=None)
 
 
-# ── Step 3: User provides (or skips) Telegram ID ────────────────────────────
+async def on_skip(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    uid = update.effective_user.id
+    if _is_admin(uid):
+        return
 
-async def fwd_id_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """User sent a Telegram ID number."""
-    text = update.message.text.strip()
-    if not text.isdigit():
+    ud    = context.user_data
+    state = ud.get(_STATE)
+    if not state:
+        return
+
+    if state == S_ID:
+        ud[_STATE] = S_PROOF
         await update.message.reply_text(
-            em("⚠️ Please send a valid numeric Telegram ID, or /skip to continue.")
+            em("📸 <b>Send proof</b> (screenshot/photo). No proof? Send /skip"),
+            parse_mode="HTML",
         )
-        return FWD_ID
-
-    context.user_data["fwd_id"] = int(text)
-    await update.message.reply_text(
-        em(f"✅ ID saved: <code>{text}</code>"),
-        parse_mode="HTML",
-    )
-    await update.message.reply_text(
-        em("📸 <b>Send proof</b> (screenshot, photo, video).\n\nNo proof? Send /skip"),
-        parse_mode="HTML",
-    )
-    return FWD_PROOF
+    elif state == S_PROOF:
+        await _finish_report(update, context, proof_file_id=None)
 
 
-async def fwd_id_skip(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """User skipped the ID step."""
-    await update.message.reply_text(
-        em("📸 <b>Send proof</b> (screenshot, photo, video).\n\nNo proof? Send /skip"),
-        parse_mode="HTML",
-    )
-    return FWD_PROOF
+async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    uid = update.effective_user.id
+    if _is_admin(uid):
+        return
+
+    ud    = context.user_data
+    state = ud.get(_STATE)
+    if state != S_PROOF:
+        return
+
+    photo_id = update.message.photo[-1].file_id if update.message.photo else None
+    await _finish_report(update, context, proof_file_id=photo_id)
 
 
-# ── Step 4a: User sends photo proof ──────────────────────────────────────────
-
-async def fwd_proof_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    photo = update.message.photo[-1] if update.message.photo else None
-    doc   = update.message.document
-
-    proof_file_id   = None
-    proof_is_photo  = False
-
-    if photo:
-        proof_file_id  = photo.file_id
-        proof_is_photo = True
-    elif doc:
-        proof_file_id = doc.file_id
-
-    context.user_data["fwd_proof_file_id"]  = proof_file_id
-    context.user_data["fwd_proof_is_photo"] = proof_is_photo
-    return await _send_to_admins(update, context)
+async def on_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    uid = update.effective_user.id
+    if _is_admin(uid):
+        return
+    _clear(context.user_data)
+    await update.message.reply_text(em("❌ Report cancelled."))
 
 
-# ── Step 4b: User skips proof ─────────────────────────────────────────────────
+# ── Submit report to admins ───────────────────────────────────────────────────
 
-async def fwd_skip_proof(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data["fwd_proof_file_id"]  = None
-    context.user_data["fwd_proof_is_photo"] = False
-    return await _send_to_admins(update, context)
-
-
-# ── Send report to all admins ─────────────────────────────────────────────────
-
-async def _send_to_admins(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def _finish_report(update, context, proof_file_id):
     from bot.db import add_report
 
     submitter = update.effective_user
     ud        = context.user_data
+    fwd_id    = ud.get(_ID)
+    fwd_uname = ud.get(_UNAME)
+    fwd_name  = ud.get(_NAME, "Unknown")
+    reason    = ud.get(_REASON, "No reason provided")
 
-    fwd_id         = ud["fwd_id"]
-    fwd_uname      = ud.get("fwd_uname")
-    fwd_name       = ud.get("fwd_name", "Unknown")
-    reason         = ud.get("fwd_reason", "No reason provided")
-    proof_file_id  = ud.get("fwd_proof_file_id")
-    proof_is_photo = ud.get("fwd_proof_is_photo", False)
-
-    # Save as pending report
     report_id = await add_report(
         reporter_id      = submitter.id,
         reporter_username= submitter.username,
@@ -259,7 +299,7 @@ async def _send_to_admins(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     uname_str    = f"@{fwd_uname}" if fwd_uname else "—"
     reporter_str = f"@{submitter.username}" if submitter.username else str(submitter.id)
-    proof_line   = "\n📸 <b>Proof attached below</b>" if proof_file_id else "\n❌ No proof provided"
+    proof_line   = "\n📸 <b>Proof attached</b>" if proof_file_id else "\n❌ No proof"
 
     notif = em(
         f"📨 <b>Scammer Report #{report_id}</b>\n"
@@ -267,92 +307,43 @@ async def _send_to_admins(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         f"🎯 <b>Reported Person:</b>\n"
         f"  👤 Name     : <b>{fwd_name}</b>\n"
         f"  📝 Username : {uname_str}\n"
-        f"  🔑 Tele ID  : <code>{fwd_id}</code>\n\n"
+        f"  🔑 Tele ID  : <code>{fwd_id or '—'}</code>\n\n"
         f"⚠️ <b>Reason:</b> {reason}{proof_line}\n\n"
         f"📤 <b>Reporter:</b> {reporter_str} (ID: <code>{submitter.id}</code>)\n\n"
-        f"👇 Choose severity to add, or ignore:"
+        f"👇 Approve with severity or ignore:"
     )
-
     keyboard = InlineKeyboardMarkup([
         [
             InlineKeyboardButton("🔴 High",   callback_data=f"approve_high:{report_id}"),
             InlineKeyboardButton("🟡 Medium", callback_data=f"approve_medium:{report_id}"),
             InlineKeyboardButton("🟢 Low",    callback_data=f"approve_low:{report_id}"),
         ],
-        [
-            InlineKeyboardButton("❌ Ignore", callback_data=f"reject_sub:{report_id}"),
-        ],
+        [InlineKeyboardButton("❌ Ignore", callback_data=f"reject_sub:{report_id}")],
     ])
 
-    notified = 0
     for aid in _admin_ids():
         try:
-            if proof_file_id and proof_is_photo:
-                await context.bot.send_photo(
-                    aid, photo=proof_file_id,
-                    caption=notif, parse_mode="HTML", reply_markup=keyboard,
-                )
-            elif proof_file_id:
-                await context.bot.send_document(
-                    aid, document=proof_file_id,
-                    caption=notif, parse_mode="HTML", reply_markup=keyboard,
-                )
+            if proof_file_id:
+                await context.bot.send_photo(aid, photo=proof_file_id, caption=notif,
+                                              parse_mode="HTML", reply_markup=keyboard)
             else:
-                await context.bot.send_message(
-                    aid, notif, parse_mode="HTML", reply_markup=keyboard,
-                )
-            notified += 1
+                await context.bot.send_message(aid, notif, parse_mode="HTML", reply_markup=keyboard)
         except Exception as exc:
             logger.warning("Could not notify admin %s: %s", aid, exc)
 
-    proof_note = " with proof 📸" if proof_file_id else ""
+    _clear(context.user_data)
     await update.message.reply_text(
-        em(
-            f"✅ <b>Report #{report_id} submitted{proof_note}!</b>\n\n"
-            f"Thank you for helping keep the community safe. 🙏\n"
-            f"Our admins will review your report shortly."
-        ),
+        em(f"✅ <b>Report #{report_id} submitted!</b>\nThank you for helping keep the community safe. 🙏"),
         parse_mode="HTML",
     )
 
-    # Clear user data
-    for key in ["fwd_id", "fwd_uname", "fwd_name", "fwd_reason", "fwd_proof_file_id", "fwd_proof_is_photo"]:
-        context.user_data.pop(key, None)
 
-    return ConversationHandler.END
+# ── Register handlers ─────────────────────────────────────────────────────────
 
-
-# ── Cancel ────────────────────────────────────────────────────────────────────
-
-async def fwd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await update.message.reply_text(em("❌ Report cancelled."))
-    return ConversationHandler.END
-
-
-# ── Build handler ─────────────────────────────────────────────────────────────
-
-def build_report_forward_handler() -> ConversationHandler:
-    return ConversationHandler(
-        entry_points=[
-            MessageHandler(
-                filters.FORWARDED & filters.ChatType.PRIVATE & NON_ADMIN,
-                fwd_start,
-            )
-        ],
-        states={
-            FWD_REASON: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, fwd_reason),
-            ],
-            FWD_ID: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, fwd_id_received),
-                CommandHandler("skip", fwd_id_skip),
-            ],
-            FWD_PROOF: [
-                MessageHandler(filters.PHOTO | filters.Document.ALL, fwd_proof_photo),
-                CommandHandler("skip", fwd_skip_proof),
-            ],
-        },
-        fallbacks=[CommandHandler("cancel", fwd_cancel)],
-        per_user=True,
-        per_chat=True,
-    )
+def register(app) -> None:
+    """Register all forward-related handlers on the Application."""
+    app.add_handler(MessageHandler(filters.FORWARDED & filters.ChatType.PRIVATE, on_forward))
+    app.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.PHOTO, on_photo))
+    app.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, on_text))
+    app.add_handler(CommandHandler("skip",   on_skip))
+    app.add_handler(CommandHandler("cancel", on_cancel))
