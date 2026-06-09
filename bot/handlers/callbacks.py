@@ -6,7 +6,7 @@ import logging
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from bot.db import get_report, update_report_status, add_scammer
+from bot.db import get_report, update_report_status, add_scammer, scammer_exists
 from bot.handlers.scammer_list import scammer_list_page_callback
 from bot.services.emoji_fx import em
 from bot.services.broadcaster import broadcast_scammer
@@ -129,6 +129,51 @@ async def _reject(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         logger.warning("Could not edit admin message: %s", exc)
 
 
+async def _quickadd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """quickadd:<telegram_id>:<username> — quick-add from forwarded message."""
+    query  = update.callback_query
+    parts  = query.data.split(":", 2)
+    tg_id  = int(parts[1])
+    uname  = parts[2] if len(parts) > 2 and parts[2] else None
+
+    # Double-check duplicate
+    dup = await scammer_exists(tg_id, uname)
+    if dup:
+        await query.edit_message_text(
+            em(f"⚠️ Already listed as <b>#{dup['id']}</b>."),
+            parse_mode="HTML",
+        )
+        return
+
+    # Add with basic info — admin can update reason later with /remove + /addid
+    scammer_id = await add_scammer(
+        telegram_id = tg_id,
+        username    = uname,
+        name        = uname or str(tg_id),
+        reason      = "Added via forward",
+        proof       = None,
+        added_by    = query.from_user.id,
+        severity    = "medium",
+    )
+
+    uname_str = f"@{uname}" if uname else "—"
+    await query.edit_message_text(
+        em(
+            f"✅ <b>Scammer #{scammer_id} added!</b>\n\n"
+            f"🔑 ID       : <code>{tg_id}</code>\n"
+            f"📝 Username : {uname_str}\n"
+            f"⚠️ Reason   : Added via forward\n\n"
+            f"💡 Update reason: /remove {scammer_id} → re-add with /addid"
+        ),
+        parse_mode="HTML",
+    )
+
+    await broadcast_scammer(
+        context.bot, scammer_id, uname, tg_id,
+        "Added via forward", severity="medium",
+    )
+
+
 async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     if not query or not query.data:
@@ -151,6 +196,8 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await _reject(update, context)
         elif data.startswith("sl_page:"):
             await scammer_list_page_callback(update, context)
+        elif data.startswith("quickadd:"):
+            await _quickadd(update, context)
         else:
             logger.debug("Unknown callback: %s", data)
     except Exception as exc:

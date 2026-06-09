@@ -6,7 +6,7 @@ import os
 from functools import wraps
 from typing import Callable
 
-from telegram import Update
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes, ConversationHandler, CommandHandler, MessageHandler, filters
 
 from telegram.error import TelegramError
@@ -364,7 +364,26 @@ async def handle_forwarded_message(update: Update, context: ContextTypes.DEFAULT
         results = await search_by_username(fwd_uname)
 
     if not results:
-        # Not in DB — silently ignore (don't spam admin for every forward)
+        # Not in DB — show their info and offer quick-add button
+        uname    = f"@{fwd_uname}" if fwd_uname else "—"
+        fname    = " ".join(filter(None, [orig_user.first_name, orig_user.last_name])) or "—"
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton(
+                "➕ Add as Scammer",
+                callback_data=f"quickadd:{fwd_id}:{fwd_uname or ''}",
+            )
+        ]])
+        await msg.reply_text(
+            em(
+                f"ℹ️ <b>User not in scammer list</b>\n\n"
+                f"👤 Name     : <b>{fname}</b>\n"
+                f"📝 Username : {uname}\n"
+                f"🔑 Tele ID  : <code>{fwd_id}</code>\n\n"
+                f"Want to add them as a scammer?"
+            ),
+            parse_mode="HTML",
+            reply_markup=keyboard,
+        )
         return
 
     updated = []
