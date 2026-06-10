@@ -30,6 +30,12 @@ from bot.handlers.scammer_list import scammer_list_command
 from bot.handlers.report       import build_report_handler
 from bot.handlers.report_forward import register as register_forward_handlers
 from bot.handlers.appeal        import register as register_appeal_handlers
+from bot.handlers.force_join   import (
+    force_join_guard,
+    addchannel_command,
+    removechannel_command,
+    listchannels_command,
+)
 from bot.handlers.callbacks    import callback_router
 from bot.handlers.emoji_admin  import setemoji_cmd, delemoji_cmd, listemoji_cmd, loadpack_cmd, extractmoji_cmd
 from bot.handlers.trusted      import addtrusted_cmd, removetrusted_cmd, listtrusted_cmd
@@ -69,6 +75,11 @@ async def run() -> None:
     req = HTTPXRequest(connect_timeout=10, read_timeout=15, write_timeout=20, pool_timeout=15)
     app = Application.builder().token(BOT_TOKEN).request(req).build()
 
+    # ── Force-join gate (group=-1 → runs before EVERYTHING else) ──────────────
+    # No-op until an admin runs /addchannel. See bot/handlers/force_join.py
+    app.add_handler(MessageHandler(filters.ALL & filters.ChatType.PRIVATE, force_join_guard), group=-1)
+    app.add_handler(CallbackQueryHandler(force_join_guard), group=-1)
+
     # ── Public handlers (group + private) ────────────────────────────────────
     app.add_handler(CommandHandler("start",        start_command))
     app.add_handler(CommandHandler("help",         help_command))
@@ -106,6 +117,11 @@ async def run() -> None:
     app.add_handler(CommandHandler("addtrusted",    addtrusted_cmd))
     app.add_handler(CommandHandler("removetrusted", removetrusted_cmd))
     app.add_handler(CommandHandler("listtrusted",   listtrusted_cmd))
+
+    # Force-join channel/group management (admin)
+    app.add_handler(CommandHandler("addchannel",    addchannel_command))
+    app.add_handler(CommandHandler("removechannel", removechannel_command))
+    app.add_handler(CommandHandler("listchannels",  listchannels_command))
 
     # ── Emoji admin commands ───────────────────────────────────────────────────
     app.add_handler(CommandHandler("setemoji",    setemoji_cmd))

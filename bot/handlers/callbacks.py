@@ -11,6 +11,7 @@ from bot.db import get_report, update_report_status, add_scammer, scammer_exists
 from bot.handlers.scammer_list import scammer_list_page_callback
 from bot.handlers.start import qa_check, qa_report, qa_list
 from bot.handlers.appeal import appeal_approve, appeal_reject
+from bot.handlers.force_join import recheck_join_callback
 from bot.services.emoji_fx import em
 from bot.services.broadcaster import broadcast_scammer
 
@@ -292,6 +293,8 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await appeal_approve(update, context)
         elif data.startswith("appeal_reject:"):
             await appeal_reject(update, context)
+        elif data == "check_join":
+            await recheck_join_callback(update, context)
         else:
             logger.debug("Unknown callback: %s", data)
     except Exception as exc:

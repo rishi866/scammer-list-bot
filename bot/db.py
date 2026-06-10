@@ -123,6 +123,15 @@ async def init_db() -> None:
             );
 
             CREATE INDEX IF NOT EXISTS idx_appeals_scammer_id ON appeals(scammer_id);
+
+            CREATE TABLE IF NOT EXISTS required_channels (
+                id          BIGSERIAL PRIMARY KEY,
+                chat_id     BIGINT,
+                username    TEXT,
+                title       TEXT,
+                invite_link TEXT NOT NULL,
+                added_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
         """)
         # Idempotent migrations for columns added after initial deploy
         for tbl, col, definition in [
@@ -546,3 +555,43 @@ async def get_pending_appeal_for_scammer(scammer_id: int) -> Optional[dict]:
 async def update_appeal_status(appeal_id: int, status: str) -> None:
     pool = await _get_pool()
     await pool.execute("UPDATE appeals SET status = $1 WHERE id = $2", status, appeal_id)
+
+
+# ── Required Channels (force-join) ─────────────────────────────────────────────
+
+async def add_required_channel(
+    *, chat_id: Optional[int], username: Optional[str], title: Optional[str], invite_link: str
+) -> int:
+    pool = await _get_pool()
+    row = await pool.fetchrow(
+        """INSERT INTO required_channels (chat_id, username, title, invite_link)
+           VALUES ($1, $2, $3, $4)
+           RETURNING id""",
+        chat_id, username, title, invite_link,
+    )
+    return row["id"]
+
+
+async def list_required_channels() -> list[dict]:
+    pool = await _get_pool()
+    return _rows(await pool.fetch("SELECT * FROM required_channels ORDER BY id ASC"))
+
+
+async def count_required_channels() -> int:
+    pool = await _get_pool()
+    return await pool.fetchval("SELECT COUNT(*) FROM required_channels")
+
+
+async def get_required_channel_by_seq(seq: int) -> Optional[dict]:
+    """Get required channel by 1-based sequential position as shown in /listchannels."""
+    pool = await _get_pool()
+    return _row(await pool.fetchrow(
+        "SELECT * FROM required_channels ORDER BY id ASC LIMIT 1 OFFSET $1",
+        seq - 1,
+    ))
+
+
+async def remove_required_channel(channel_id: int) -> bool:
+    pool = await _get_pool()
+    result = await pool.execute("DELETE FROM required_channels WHERE id = $1", channel_id)
+    return result.endswith("1")
