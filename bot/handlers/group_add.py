@@ -19,14 +19,11 @@ from bot.db import (
     add_report, add_scammer, update_report_status,
     scammer_exists, is_trusted_reporter,
 )
+from bot.services.admins import get_admin_ids as _admin_ids
 from bot.services.emoji_fx import em
 from bot.services.broadcaster import broadcast_scammer
 
 logger = logging.getLogger(__name__)
-
-
-def _admin_ids() -> set[int]:
-    return {int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().isdigit()}
 
 
 def _severity_keyboard(report_id: int) -> InlineKeyboardMarkup:

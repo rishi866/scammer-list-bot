@@ -9,15 +9,12 @@ from telegram import Bot
 from telegram.error import TelegramError
 
 from bot.db import get_weekly_stats
+from bot.services.admins import get_admin_ids as _admin_ids
 from bot.services.emoji_fx import em
 
 logger = logging.getLogger(__name__)
 
 DIGEST_INTERVAL = 7 * 24 * 3600  # 7 days
-
-
-def _admin_ids() -> list[int]:
-    return [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().isdigit()]
 
 
 async def send_digest(bot: Bot) -> None:

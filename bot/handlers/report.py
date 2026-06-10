@@ -14,6 +14,7 @@ from telegram.ext import (
 )
 
 from bot.db import add_report
+from bot.services.admins import get_admin_ids
 from bot.services.emoji_fx import em
 
 logger = logging.getLogger(__name__)
@@ -80,7 +81,7 @@ async def report_proof(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     )
 
     # Notify admins
-    admin_ids = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().isdigit()]
+    admin_ids = get_admin_ids()
     target_display = (
         f"ID {context.user_data['report_target_id']}"
         if context.user_data.get("report_target_id")

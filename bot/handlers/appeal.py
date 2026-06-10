@@ -26,13 +26,10 @@ from bot.db import (
     update_appeal_status,
     remove_scammer,
 )
+from bot.services.admins import get_admin_ids as _admin_ids
 from bot.services.emoji_fx import em
 
 logger = logging.getLogger(__name__)
-
-
-def _admin_ids() -> set[int]:
-    return {int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().isdigit()}
 
 
 async def appeal_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

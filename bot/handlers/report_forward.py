@@ -17,6 +17,7 @@ import os
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes, MessageHandler, CommandHandler, filters
 
+from bot.services.admins import get_admin_ids as _admin_ids
 from bot.services.emoji_fx import em
 
 logger = logging.getLogger(__name__)
@@ -34,10 +35,6 @@ S_ID         = "id"
 S_PROOF      = "proof"
 # State — /addid user flow (only proof needed, ID already known)
 S_ADDID_PROOF = "addid_proof"
-
-
-def _admin_ids() -> set[int]:
-    return {int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().isdigit()}
 
 
 def _is_admin(uid: int) -> bool:

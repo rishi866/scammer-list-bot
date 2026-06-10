@@ -15,13 +15,10 @@ from telegram.ext import ContextTypes
 from telegram.error import TelegramError
 
 from bot.db import add_trusted_reporter, remove_trusted_reporter, list_trusted_reporters
+from bot.services.admins import get_admin_ids as _admin_ids
 from bot.services.emoji_fx import em
 
 logger = logging.getLogger(__name__)
-
-
-def _admin_ids() -> set[int]:
-    return {int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().isdigit()}
 
 
 def admin_only(func):

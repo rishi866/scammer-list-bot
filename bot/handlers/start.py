@@ -4,6 +4,7 @@ from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
 from telegram.error import TelegramError
 from bot.db import search_by_telegram_id, count_scammers
+from bot.services.admins import get_admin_ids as _admin_ids, is_owner
 from bot.services.emoji_fx import em
 
 logger = logging.getLogger(__name__)
@@ -11,11 +12,7 @@ logger = logging.getLogger(__name__)
 SEV_ICON = {"high": "🔴", "medium": "🟡", "low": "🟢"}
 
 
-def _admin_ids() -> list[int]:
-    return [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().isdigit()]
-
-
-def _welcome_text(count: int, is_admin: bool = False) -> str:
+def _welcome_text(count: int, is_admin: bool = False, is_owner_user: bool = False) -> str:
     text = (
         "✨ <b>Scammer List Bot</b>\n\n"
         "Report and verify Telegram scammers to keep the community safe.\n"
@@ -54,7 +51,15 @@ def _welcome_text(count: int, is_admin: bool = False) -> str:
             "• /edit &lt;#&gt; &lt;field&gt; &lt;value&gt; — fix reason/severity/username/name/id\n"
             "• /remove &lt;#&gt; · /list · /stats · /fixids · /setid\n"
             "• /addchannel · /listchannels · /removechannel &lt;#&gt; — require "
-            "users to join channel(s)/group(s) before using the bot in PM"
+            "users to join channel(s)/group(s) before using the bot in PM\n"
+            "• /listadmins — view all bot admins"
+        )
+
+    if is_owner_user:
+        text += (
+            "\n\n<b>👑 Owner Tools</b>\n"
+            "• /addadmin &lt;telegram_id&gt; — grant admin access\n"
+            "• /removeadmin &lt;telegram_id&gt; — revoke admin access"
         )
 
     return text
@@ -77,7 +82,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     count    = await count_scammers()
     is_admin = user.id in _admin_ids()
     await update.message.reply_text(
-        em(_welcome_text(count, is_admin)),
+        em(_welcome_text(count, is_admin, is_owner(user.id))),
         parse_mode="HTML",
         reply_markup=_quick_keyboard(),
     )
@@ -126,7 +131,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     count    = await count_scammers()
     is_admin = user.id in _admin_ids()
     await update.message.reply_text(
-        em(_welcome_text(count, is_admin)),
+        em(_welcome_text(count, is_admin, is_owner(user.id))),
         parse_mode="HTML",
         reply_markup=_quick_keyboard(),
     )

@@ -40,6 +40,7 @@ from bot.handlers.force_join   import (
 from bot.handlers.callbacks    import callback_router
 from bot.handlers.emoji_admin  import setemoji_cmd, delemoji_cmd, listemoji_cmd, loadpack_cmd, extractmoji_cmd
 from bot.handlers.trusted      import addtrusted_cmd, removetrusted_cmd, listtrusted_cmd
+from bot.handlers.owner        import addadmin_command, removeadmin_command, listadmins_command
 from bot.handlers.new_member   import on_new_member
 from bot.handlers.admin        import (
     build_add_handler,
@@ -53,6 +54,7 @@ from bot.handlers.admin        import (
     fixids_command,
     setid_command,
 )
+from bot.services.admins             import refresh_admin_cache
 from bot.services.username_refresher import username_refresh_loop
 from bot.services.broadcaster        import on_bot_member_update
 from bot.services.weekly_digest      import weekly_digest_loop
@@ -66,6 +68,7 @@ async def run() -> None:
         return
 
     await init_db()
+    await refresh_admin_cache()
 
     try:
         await emoji_fx.load()
@@ -119,6 +122,11 @@ async def run() -> None:
     app.add_handler(CommandHandler("removetrusted", removetrusted_cmd))
     app.add_handler(CommandHandler("listtrusted",   listtrusted_cmd))
 
+    # Owner-only admin management
+    app.add_handler(CommandHandler("addadmin",    addadmin_command))
+    app.add_handler(CommandHandler("removeadmin", removeadmin_command))
+    app.add_handler(CommandHandler("listadmins",  listadmins_command))
+
     # Force-join channel/group management (admin)
     app.add_handler(CommandHandler("addchannel",    addchannel_command))
     app.add_handler(CommandHandler("removechannel", removechannel_command))
@@ -158,6 +166,7 @@ async def run() -> None:
         BotCommand("addtrusted",    "Add trusted reporter (admin)"),
         BotCommand("removetrusted", "Remove trusted reporter (admin)"),
         BotCommand("listtrusted",   "List trusted reporters (admin)"),
+        BotCommand("listadmins",    "List bot admins (admin)"),
     ]
 
     await app.initialize()

@@ -132,6 +132,12 @@ async def init_db() -> None:
                 invite_link TEXT NOT NULL,
                 added_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
             );
+
+            CREATE TABLE IF NOT EXISTS bot_admins (
+                telegram_id BIGINT PRIMARY KEY,
+                added_by    BIGINT,
+                added_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
         """)
         # Idempotent migrations for columns added after initial deploy
         for tbl, col, definition in [
@@ -595,3 +601,26 @@ async def remove_required_channel(channel_id: int) -> bool:
     pool = await _get_pool()
     result = await pool.execute("DELETE FROM required_channels WHERE id = $1", channel_id)
     return result.endswith("1")
+
+
+# ── Bot Admins (owner-managed, in addition to ADMIN_IDS env var) ──────────────
+
+async def add_admin(telegram_id: int, added_by: int) -> None:
+    pool = await _get_pool()
+    await pool.execute(
+        """INSERT INTO bot_admins (telegram_id, added_by)
+           VALUES ($1, $2)
+           ON CONFLICT (telegram_id) DO NOTHING""",
+        telegram_id, added_by,
+    )
+
+
+async def remove_admin(telegram_id: int) -> bool:
+    pool = await _get_pool()
+    result = await pool.execute("DELETE FROM bot_admins WHERE telegram_id = $1", telegram_id)
+    return result.endswith("1")
+
+
+async def list_admins() -> list[dict]:
+    pool = await _get_pool()
+    return _rows(await pool.fetch("SELECT * FROM bot_admins ORDER BY added_at ASC"))

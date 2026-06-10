@@ -39,14 +39,11 @@ from bot.db import (
     remove_required_channel,
 )
 from bot.handlers.admin import admin_only
+from bot.services.admins import get_admin_ids as _admin_ids
 from bot.services.emoji_fx import em
 from bot.services.force_join import get_unjoined_channels, build_join_prompt
 
 logger = logging.getLogger(__name__)
-
-
-def _admin_ids() -> set[int]:
-    return {int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().isdigit()}
 
 
 # ── Gate (group=-1, runs before all other handlers) ───────────────────────────

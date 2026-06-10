@@ -30,15 +30,12 @@ from bot.db import (
     search_by_telegram_id,
     search_by_username,
 )
+from bot.services.admins import get_admin_ids as _get_admin_ids, get_admin_ids as _admin_ids
 from bot.services.emoji_fx import em
 
 logger = logging.getLogger(__name__)
 
 ADD_TARGET, ADD_NAME, ADD_REASON, ADD_PROOF, ADD_NOTES = range(5)
-
-
-def _get_admin_ids() -> set[int]:
-    return {int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().isdigit()}
 
 
 def admin_only(func: Callable):

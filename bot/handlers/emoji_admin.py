@@ -17,12 +17,9 @@ from telegram.ext import ContextTypes
 
 from bot.db import list_custom_emojis, upsert_custom_emoji, delete_custom_emoji
 from bot.services import emoji_fx
+from bot.services.admins import get_admin_ids as _admin_ids
 
 logger = logging.getLogger(__name__)
-
-
-def _admin_ids() -> set[int]:
-    return {int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().isdigit()}
 
 
 def admin_only(func):
