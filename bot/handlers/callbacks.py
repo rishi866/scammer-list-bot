@@ -264,9 +264,16 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if not query or not query.data:
         return
 
-    await query.answer()
-
     data = query.data
+
+    # qa_check / qa_report / check_join always send their own query.answer()
+    # (with show_alert=True so the user sees a popup). Telegram only honours
+    # the FIRST answerCallbackQuery for a given callback — answering here
+    # first would silently swallow that popup, so skip the blanket answer
+    # for these and let the sub-handler answer exactly once.
+    if data not in ("qa_check", "qa_report", "check_join"):
+        await query.answer()
+
     try:
         if data.startswith("approve_high:"):
             await _approve(update, context, severity="high")
