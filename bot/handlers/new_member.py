@@ -12,7 +12,13 @@ from telegram import Update
 from telegram.ext import ContextTypes
 from telegram.error import TelegramError
 
-from bot.db import search_by_telegram_id, search_by_username, update_scammer_telegram_id
+from bot.db import (
+    search_by_telegram_id,
+    search_by_username,
+    update_scammer_telegram_id,
+    update_scammer_username,
+    update_scammer_field,
+)
 from bot.services.emoji_fx import em
 
 logger = logging.getLogger(__name__)
@@ -47,9 +53,15 @@ async def on_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not results:
         return
 
-    # If we found them by username but DB has no telegram_id → update it now
-    # (scammer joined a group, so we have their real ID directly from the event)
+    # The join event hands us this user's CURRENT username/name straight from
+    # Telegram — no get_chat() call needed (which fails for users the bot has
+    # no other access to, e.g. they never /start'd or messaged it). Use this
+    # to backfill IDs and keep username/name in sync, even for scammers who
+    # never interact with the bot directly — joining ANY covered group is enough.
+    live_name = " ".join(filter(None, [user.first_name, user.last_name])) or None
+
     for entry in results:
+        # If we found them by username but DB has no telegram_id → save it now
         if not entry.get("telegram_id") and user.id:
             await update_scammer_telegram_id(entry["id"], user.id, user.username)
             entry["telegram_id"] = user.id
@@ -57,6 +69,23 @@ async def on_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 "Auto-resolved telegram_id=%s for scammer #%s (@%s) on group join",
                 user.id, entry["id"], user.username,
             )
+
+        # Backfill / refresh username (old one is preserved in history)
+        old_username = entry.get("username")
+        if user.username != old_username:
+            await update_scammer_username(entry["id"], user.username, old_username)
+            entry["username"] = user.username
+            logger.info(
+                "Synced username for scammer #%s on group join: %s -> %s",
+                entry["id"],
+                f"@{old_username}" if old_username else "—",
+                f"@{user.username}" if user.username else "—",
+            )
+
+        # Backfill / refresh display name
+        if live_name and entry.get("name") != live_name:
+            await update_scammer_field(entry["id"], "name", live_name)
+            entry["name"] = live_name
 
     # Build alert
     e = results[0]
