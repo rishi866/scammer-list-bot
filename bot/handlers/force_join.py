@@ -107,6 +107,43 @@ async def recheck_join_callback(update: Update, context: ContextTypes.DEFAULT_TY
         pass
 
 
+# ── /groupid — find a chat's ID/username for /addchannel ─────────────────────
+
+@admin_only
+async def groupid_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Run inside the target group/channel to get what /addchannel needs."""
+    chat = update.effective_chat
+
+    if chat.type == "private":
+        await update.message.reply_text(
+            em(
+                "ℹ️ Send <code>/groupid</code> <b>inside</b> the group/channel you "
+                "want to use for force-join (not here in PM)."
+            ),
+            parse_mode="HTML",
+        )
+        return
+
+    if chat.username:
+        hint = f"✅ Public — use:\n<code>/addchannel @{chat.username}</code>"
+    else:
+        hint = (
+            "🔒 Private (no public username).\n"
+            "Get an invite link: group/channel info → <b>Invite Links</b>, then in PM:\n"
+            f"<code>/addchannel {chat.id} &lt;invite_link&gt; {chat.title}</code>"
+        )
+
+    await update.message.reply_text(
+        em(
+            f"🆔 <b>Chat Info</b>\n\n"
+            f"📛 Title    : {chat.title}\n"
+            f"🔑 Chat ID  : <code>{chat.id}</code>\n"
+            f"📝 Username : {f'@{chat.username}' if chat.username else '— (private)'}\n\n"
+        ) + hint,
+        parse_mode="HTML",
+    )
+
+
 # ── Admin: /addchannel /removechannel /listchannels ───────────────────────────
 
 _ADDCHANNEL_USAGE = (

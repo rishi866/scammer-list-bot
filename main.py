@@ -35,6 +35,7 @@ from bot.handlers.force_join   import (
     addchannel_command,
     removechannel_command,
     listchannels_command,
+    groupid_command,
 )
 from bot.handlers.callbacks    import callback_router
 from bot.handlers.emoji_admin  import setemoji_cmd, delemoji_cmd, listemoji_cmd, loadpack_cmd, extractmoji_cmd
@@ -122,6 +123,7 @@ async def run() -> None:
     app.add_handler(CommandHandler("addchannel",    addchannel_command))
     app.add_handler(CommandHandler("removechannel", removechannel_command))
     app.add_handler(CommandHandler("listchannels",  listchannels_command))
+    app.add_handler(CommandHandler("groupid",       groupid_command))
 
     # ── Emoji admin commands ───────────────────────────────────────────────────
     app.add_handler(CommandHandler("setemoji",    setemoji_cmd))
