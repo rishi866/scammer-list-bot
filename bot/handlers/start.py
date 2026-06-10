@@ -3,7 +3,7 @@ import logging
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
 from telegram.error import TelegramError
-from bot.db import search_by_telegram_id, count_scammers
+from bot.db import search_by_telegram_id, count_scammers, upsert_bot_user
 from bot.services.admins import get_admin_ids as _admin_ids, is_owner
 from bot.services.emoji_fx import em
 
@@ -87,11 +87,15 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         reply_markup=_quick_keyboard(),
     )
 
+    # Track first-time vs returning users (avoid repeat "New User Joined" spam)
+    is_new_user = await upsert_bot_user(user.id, user.username, full_name)
+
     # Check if this user is a known scammer
     scammer_records = await search_by_telegram_id(user.id)
 
+    notif = None
     if scammer_records:
-        # 🚨 SCAMMER ALERT to admins
+        # 🚨 SCAMMER ALERT to admins (every time — worth re-flagging)
         e        = scammer_records[0]
         sev      = (e.get("severity") or "medium").lower()
         sev_icon = SEV_ICON.get(sev, "🟡")
@@ -108,8 +112,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             f"⚠️ Reason   : {e['reason']}\n"
             f"🔄 Past usernames: {hist_str}"
         )
-    else:
-        # Normal new user notification
+    elif is_new_user:
+        # Normal new user notification — only the FIRST time they /start
         notif = (
             f"🆕 <b>New User Joined</b>\n\n"
             f"👤 Name    : <b>{full_name}</b>\n"
@@ -117,13 +121,14 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             f"🔑 User ID : <code>{user.id}</code>"
         )
 
-    for aid in _admin_ids():
-        if aid == user.id:
-            continue
-        try:
-            await context.bot.send_message(aid, notif, parse_mode="HTML")
-        except TelegramError as e:
-            logger.warning("Could not notify admin %s: %s", aid, e)
+    if notif:
+        for aid in _admin_ids():
+            if aid == user.id:
+                continue
+            try:
+                await context.bot.send_message(aid, notif, parse_mode="HTML")
+            except TelegramError as e:
+                logger.warning("Could not notify admin %s: %s", aid, e)
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

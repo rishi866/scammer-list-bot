@@ -138,6 +138,14 @@ async def init_db() -> None:
                 added_by    BIGINT,
                 added_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
             );
+
+            CREATE TABLE IF NOT EXISTS bot_users (
+                telegram_id BIGINT PRIMARY KEY,
+                username    TEXT,
+                full_name   TEXT,
+                first_seen  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                last_seen   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
         """)
         # Idempotent migrations for columns added after initial deploy
         for tbl, col, definition in [
@@ -624,3 +632,26 @@ async def remove_admin(telegram_id: int) -> bool:
 async def list_admins() -> list[dict]:
     pool = await _get_pool()
     return _rows(await pool.fetch("SELECT * FROM bot_admins ORDER BY added_at ASC"))
+
+
+# ── Bot Users (track who has /start'd the bot, for "new user" notifications) ──
+
+async def upsert_bot_user(telegram_id: int, username: Optional[str], full_name: Optional[str]) -> bool:
+    """Record that telegram_id has used the bot.
+
+    Returns True the FIRST time we see this telegram_id (a genuinely new
+    user), and False on every subsequent call (returning user) — so callers
+    can avoid re-sending "new user" notifications for the same person.
+    """
+    pool = await _get_pool()
+    row = await pool.fetchrow(
+        """INSERT INTO bot_users (telegram_id, username, full_name)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (telegram_id) DO UPDATE
+               SET username  = EXCLUDED.username,
+                   full_name = EXCLUDED.full_name,
+                   last_seen = NOW()
+           RETURNING (xmax = 0) AS is_new""",
+        telegram_id, username, full_name,
+    )
+    return bool(row["is_new"])
