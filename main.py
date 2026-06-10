@@ -128,6 +128,7 @@ async def run() -> None:
         BotCommand("check",         "Check if someone is a scammer"),
         BotCommand("scammer_list",  "View all confirmed scammers"),
         BotCommand("report",        "Report a suspected scammer"),
+        BotCommand("addid",         "Report by Telegram ID: /addid <id> reason"),
         BotCommand("help",          "Show help"),
         BotCommand("addtrusted",    "Add trusted reporter (admin)"),
         BotCommand("removetrusted", "Remove trusted reporter (admin)"),

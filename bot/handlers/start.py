@@ -11,12 +11,28 @@ logger = logging.getLogger(__name__)
 _WELCOME = (
     "✨ <b>Scammer List Bot</b>\n\n"
     "Report and verify Telegram scammers to keep the community safe.\n\n"
-    "<b>Commands:</b>\n"
-    "🔍 /check — Check if someone is a known scammer\n"
-    "📝 /add @username — Submit a scammer (in group)\n"
-    "📋 /scammer_list — View all confirmed scammers\n"
-    "📨 /report — Report via private chat\n"
-    "ℹ️ /help — Show this message"
+
+    "<b>🔍 Check Someone</b>\n"
+    "• /check @username — search by username\n"
+    "• /check 123456789 — search by Telegram ID\n"
+    "• /check John Doe — search by name\n\n"
+
+    "<b>🚨 Report a Scammer</b> (open to everyone — admin approves before listing)\n"
+    "• 📨 /report — guided report (PM: full form + proof · group: quick "
+    "<code>/report @user reason</code>)\n"
+    "• 🔑 /addid &lt;id&gt; [reason] — report by Telegram ID, I auto-fetch "
+    "their name &amp; username (works in PM &amp; groups)\n"
+    "• 📝 /add @username [reason] — report inside a group "
+    "(reply to a photo to attach proof)\n"
+    "• ↪️ <b>Forward</b> a scammer's message to me — in PM I'll start a "
+    "report; in groups I'll check if they're already listed\n\n"
+
+    "<b>📋 Other</b>\n"
+    "• /scammer_list — view all confirmed scammers\n"
+    "• /help — show this message\n\n"
+
+    "✅ Approved reports are added to the list, broadcast to every group, "
+    "and the scammer is auto-kicked/banned wherever I'm admin."
 )
 
 SEV_ICON = {"high": "🔴", "medium": "🟡", "low": "🟢"}
