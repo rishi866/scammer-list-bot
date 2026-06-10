@@ -9,6 +9,8 @@ from telegram.ext import ContextTypes
 import os
 from bot.db import get_report, update_report_status, add_scammer, scammer_exists, list_active_bot_groups
 from bot.handlers.scammer_list import scammer_list_page_callback
+from bot.handlers.start import qa_check, qa_report, qa_list
+from bot.handlers.appeal import appeal_approve, appeal_reject
 from bot.services.emoji_fx import em
 from bot.services.broadcaster import broadcast_scammer
 
@@ -280,6 +282,16 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await scammer_list_page_callback(update, context)
         elif data.startswith("quickadd:"):
             await _quickadd(update, context)
+        elif data == "qa_check":
+            await qa_check(update, context)
+        elif data == "qa_report":
+            await qa_report(update, context)
+        elif data == "qa_list":
+            await qa_list(update, context)
+        elif data.startswith("appeal_approve:"):
+            await appeal_approve(update, context)
+        elif data.startswith("appeal_reject:"):
+            await appeal_reject(update, context)
         else:
             logger.debug("Unknown callback: %s", data)
     except Exception as exc:

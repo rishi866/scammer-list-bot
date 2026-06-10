@@ -15,6 +15,7 @@ from bot.db import (
     add_scammer,
     remove_scammer,
     get_scammer_by_id,
+    get_scammer_by_seq,
     list_scammers,
     count_scammers,
     list_pending_reports,
@@ -23,6 +24,8 @@ from bot.db import (
     count_reports,
     get_scammers_missing_id,
     update_scammer_telegram_id,
+    update_scammer_field,
+    EDITABLE_FIELDS,
     scammer_exists,
     search_by_telegram_id,
     search_by_username,
@@ -212,6 +215,76 @@ async def remove_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
     else:
         await update.message.reply_text(em(f"❌ Could not remove #{seq}."), parse_mode="HTML")
+
+
+# ── /edit ─────────────────────────────────────────────────────────────────────
+
+_EDIT_USAGE = (
+    "✏️ <b>Usage:</b> /edit &lt;#&gt; &lt;field&gt; &lt;value&gt;\n"
+    "(use the <b>#</b> shown in /scammer_list)\n\n"
+    "<b>Fields:</b> reason · severity · username · name · id · notes · proof\n\n"
+    "<b>Examples:</b>\n"
+    "<code>/edit 3 reason Fake crypto investment scheme</code>\n"
+    "<code>/edit 3 severity high</code>\n"
+    "<code>/edit 3 username new_username</code>\n"
+    "<code>/edit 3 id 123456789</code>"
+)
+
+
+@admin_only
+async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    args = context.args
+    if len(args) < 3 or not args[0].isdigit():
+        await update.message.reply_text(em(_EDIT_USAGE), parse_mode="HTML")
+        return
+
+    seq       = int(args[0])
+    field     = args[1].lower()
+    value_raw = " ".join(args[2:]).strip()
+
+    if field not in EDITABLE_FIELDS:
+        await update.message.reply_text(em(_EDIT_USAGE), parse_mode="HTML")
+        return
+
+    entry = await get_scammer_by_seq(seq)
+    if not entry:
+        await update.message.reply_text(em(f"❌ No scammer at position #{seq}."), parse_mode="HTML")
+        return
+
+    # Per-field validation / normalization
+    if field in ("id", "telegram_id"):
+        if not value_raw.lstrip("-").isdigit():
+            await update.message.reply_text(em("⚠️ Telegram ID must be a number."), parse_mode="HTML")
+            return
+        value: object = int(value_raw)
+    elif field == "severity":
+        value = value_raw.lower()
+        if value not in ("high", "medium", "low"):
+            await update.message.reply_text(em("⚠️ Severity must be: high, medium, or low."), parse_mode="HTML")
+            return
+    elif field == "username":
+        value = value_raw.lstrip("@") or None
+    else:
+        value = value_raw
+
+    column    = EDITABLE_FIELDS[field]
+    old_value = entry.get(column)
+
+    ok = await update_scammer_field(entry["id"], field, value)
+    if not ok:
+        await update.message.reply_text(em(f"❌ Could not update #{seq}."), parse_mode="HTML")
+        return
+
+    uname = f"@{entry.get('username')}" if entry.get("username") else f"ID {entry.get('telegram_id') or '—'}"
+    await update.message.reply_text(
+        em(
+            f"✅ <b>#{seq} ({uname}) updated</b>\n\n"
+            f"Field : <b>{field}</b>\n"
+            f"Old   : <code>{old_value if old_value not in (None, '') else '—'}</code>\n"
+            f"New   : <code>{value}</code>"
+        ),
+        parse_mode="HTML",
+    )
 
 
 # ── /list ─────────────────────────────────────────────────────────────────────

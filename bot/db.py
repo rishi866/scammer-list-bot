@@ -111,6 +111,18 @@ async def init_db() -> None:
                 added_by  BIGINT NOT NULL,
                 added_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
             );
+
+            CREATE TABLE IF NOT EXISTS appeals (
+                id          BIGSERIAL PRIMARY KEY,
+                scammer_id  BIGINT NOT NULL,
+                telegram_id BIGINT,
+                username    TEXT,
+                message     TEXT NOT NULL,
+                status      TEXT NOT NULL DEFAULT 'pending',
+                created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_appeals_scammer_id ON appeals(scammer_id);
         """)
         # Idempotent migrations for columns added after initial deploy
         for tbl, col, definition in [
@@ -198,6 +210,35 @@ async def list_scammers(limit: int = 50, offset: int = 0) -> list[dict]:
 async def count_scammers() -> int:
     pool = await _get_pool()
     return await pool.fetchval("SELECT COUNT(*) FROM scammers")
+
+
+# ── Edit scammer fields ───────────────────────────────────────────────────────
+
+# Maps the user-facing field name (used in /edit) → actual DB column.
+EDITABLE_FIELDS = {
+    "reason":      "reason",
+    "severity":    "severity",
+    "username":    "username",
+    "name":        "name",
+    "id":          "telegram_id",
+    "telegram_id": "telegram_id",
+    "notes":       "notes",
+    "proof":       "proof",
+}
+
+
+async def update_scammer_field(scammer_id: int, field: str, value) -> bool:
+    """Update a single column of a scammer entry.
+
+    `field` must be a key in EDITABLE_FIELDS (validated by caller) — this
+    keeps the interpolated column name restricted to a fixed whitelist.
+    """
+    column = EDITABLE_FIELDS.get(field)
+    if not column:
+        return False
+    pool = await _get_pool()
+    result = await pool.execute(f"UPDATE scammers SET {column} = $1 WHERE id = $2", value, scammer_id)
+    return result.endswith("1")
 
 
 # ── Reports ───────────────────────────────────────────────────────────────────
@@ -472,3 +513,36 @@ async def get_weekly_stats() -> dict:
         "approved_week":  approved_w,
         "top_reporters":  [dict(r) for r in top],
     }
+
+
+# ── Appeals ───────────────────────────────────────────────────────────────────
+
+async def add_appeal(
+    *, scammer_id: int, telegram_id: Optional[int], username: Optional[str], message: str
+) -> int:
+    pool = await _get_pool()
+    row = await pool.fetchrow(
+        """INSERT INTO appeals (scammer_id, telegram_id, username, message)
+           VALUES ($1, $2, $3, $4)
+           RETURNING id""",
+        scammer_id, telegram_id, username, message,
+    )
+    return row["id"]
+
+
+async def get_appeal(appeal_id: int) -> Optional[dict]:
+    pool = await _get_pool()
+    return _row(await pool.fetchrow("SELECT * FROM appeals WHERE id = $1", appeal_id))
+
+
+async def get_pending_appeal_for_scammer(scammer_id: int) -> Optional[dict]:
+    pool = await _get_pool()
+    return _row(await pool.fetchrow(
+        "SELECT * FROM appeals WHERE scammer_id = $1 AND status = 'pending' LIMIT 1",
+        scammer_id,
+    ))
+
+
+async def update_appeal_status(appeal_id: int, status: str) -> None:
+    pool = await _get_pool()
+    await pool.execute("UPDATE appeals SET status = $1 WHERE id = $2", status, appeal_id)

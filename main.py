@@ -29,6 +29,7 @@ from bot.handlers.group_add    import group_add_command
 from bot.handlers.scammer_list import scammer_list_command
 from bot.handlers.report       import build_report_handler
 from bot.handlers.report_forward import register as register_forward_handlers
+from bot.handlers.appeal        import register as register_appeal_handlers
 from bot.handlers.callbacks    import callback_router
 from bot.handlers.emoji_admin  import setemoji_cmd, delemoji_cmd, listemoji_cmd, loadpack_cmd, extractmoji_cmd
 from bot.handlers.trusted      import addtrusted_cmd, removetrusted_cmd, listtrusted_cmd
@@ -36,6 +37,7 @@ from bot.handlers.new_member   import on_new_member
 from bot.handlers.admin        import (
     build_add_handler,
     remove_command,
+    edit_command,
     list_command,
     pending_command,
     approve_command,
@@ -82,12 +84,16 @@ async def run() -> None:
     # Forward any message in PM → unified handler (admin: resolve/quick-add, user: report flow)
     register_forward_handlers(app)
 
-    # Inline button callbacks (approve/reject/severity + scammer_list pagination)
+    # /appeal in PM → dispute a listing (notifies admins with approve/reject buttons)
+    register_appeal_handlers(app)
+
+    # Inline button callbacks (approve/reject/severity + scammer_list pagination + quick actions)
     app.add_handler(CallbackQueryHandler(callback_router))
 
     # ── Admin-only (private chat) ─────────────────────────────────────────────
     app.add_handler(build_add_handler())   # multi-step /add in PM → direct DB insert
     app.add_handler(CommandHandler("remove",        remove_command))
+    app.add_handler(CommandHandler("edit",          edit_command))
     app.add_handler(CommandHandler("list",          list_command))
     app.add_handler(CommandHandler("pending",       pending_command))
     app.add_handler(CommandHandler("approve",       approve_command))
@@ -129,6 +135,7 @@ async def run() -> None:
         BotCommand("scammer_list",  "View all confirmed scammers"),
         BotCommand("report",        "Report a suspected scammer"),
         BotCommand("addid",         "Report by Telegram ID: /addid <id> reason"),
+        BotCommand("appeal",        "Dispute your listing (if added by mistake)"),
         BotCommand("help",          "Show help"),
         BotCommand("addtrusted",    "Add trusted reporter (admin)"),
         BotCommand("removetrusted", "Remove trusted reporter (admin)"),
