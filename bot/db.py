@@ -669,3 +669,18 @@ async def get_bot_user(telegram_id: int) -> Optional[dict]:
     return _row(await pool.fetchrow(
         "SELECT * FROM bot_users WHERE telegram_id = $1", telegram_id
     ))
+
+
+async def get_bot_user_by_username(username: str) -> Optional[dict]:
+    """Look up a passively-cached bot_user by @username (case-insensitive).
+
+    Telegram usernames are unique and case-insensitive, so this lets us map
+    an @username back to a telegram_id using whatever the bot has seen in
+    group activity — e.g. to check whether a reported @username actually
+    belongs to a bot admin/owner.
+    """
+    pool = await _get_pool()
+    return _row(await pool.fetchrow(
+        "SELECT * FROM bot_users WHERE LOWER(username) = LOWER($1)",
+        username.lstrip("@"),
+    ))

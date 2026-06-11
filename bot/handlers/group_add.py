@@ -19,7 +19,11 @@ from bot.db import (
     add_report, add_scammer, update_report_status,
     scammer_exists, is_trusted_reporter,
 )
-from bot.services.admins import get_admin_ids as _admin_ids
+from bot.services.admins import (
+    get_admin_ids as _admin_ids,
+    resolve_protected_role,
+    protected_block_message,
+)
 from bot.services.emoji_fx import em
 from bot.services.broadcaster import broadcast_scammer
 
@@ -81,6 +85,12 @@ async def group_add_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     submitter = update.effective_user
     group     = update.effective_chat
+
+    # --- Protect bot owner/admins from being reported -----------------------
+    role = await resolve_protected_role(target_id, target_username, bot=context.bot)
+    if role:
+        await msg.reply_text(em(protected_block_message(role)), parse_mode="HTML")
+        return
 
     # --- Duplicate detection -----------------------------------------------
     dup = await scammer_exists(target_id, target_username)

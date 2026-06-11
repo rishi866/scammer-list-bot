@@ -32,7 +32,12 @@ from bot.db import (
     search_by_telegram_id,
     search_by_username,
 )
-from bot.services.admins import get_admin_ids as _get_admin_ids, get_admin_ids as _admin_ids
+from bot.services.admins import (
+    get_admin_ids as _get_admin_ids,
+    get_admin_ids as _admin_ids,
+    resolve_protected_role,
+    protected_block_message,
+)
 from bot.services.emoji_fx import em
 
 logger = logging.getLogger(__name__)
@@ -111,6 +116,18 @@ async def add_target(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
                    f"👤 Step 2/5 — Enter their full name manually:"),
                 parse_mode="HTML",
             )
+
+    # Protect bot owner/admins from being added as a scammer
+    role = await resolve_protected_role(
+        context.user_data.get("add_target_id"),
+        context.user_data.get("add_target_uname"),
+        bot=context.bot,
+    )
+    if role:
+        await update.message.reply_text(em(protected_block_message(role)), parse_mode="HTML")
+        context.user_data.clear()
+        return ConversationHandler.END
+
     return ADD_NAME
 
 

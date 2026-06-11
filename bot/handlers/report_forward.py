@@ -17,7 +17,11 @@ import os
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes, MessageHandler, CommandHandler, filters
 
-from bot.services.admins import get_admin_ids as _admin_ids
+from bot.services.admins import (
+    get_admin_ids as _admin_ids,
+    resolve_protected_role,
+    protected_block_message,
+)
 from bot.services.emoji_fx import em
 
 logger = logging.getLogger(__name__)
@@ -84,6 +88,12 @@ async def on_addid_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     telegram_id = int(args[0].lstrip("@"))
     reason      = " ".join(args[1:]).strip() if len(args) > 1 else "No reason provided"
+
+    # Protect bot owner/admins from being reported
+    role = await resolve_protected_role(telegram_id, bot=context.bot)
+    if role:
+        await update.message.reply_text(em(protected_block_message(role)), parse_mode="HTML")
+        return
 
     # Duplicate check
     from bot.db import scammer_exists
@@ -223,6 +233,12 @@ async def on_forward(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     ud  = context.user_data
 
     fwd_id, fwd_uname, fwd_name = _extract_fwd_user(msg)
+
+    # Protect bot owner/admins from being reported (covers both flows below)
+    role = await resolve_protected_role(fwd_id, fwd_uname, bot=context.bot)
+    if role:
+        await msg.reply_text(em(protected_block_message(role)), parse_mode="HTML")
+        return
 
     # ── ADMIN FLOW ──────────────────────────────────────────────────────────
     if _is_admin(uid):
@@ -631,6 +647,12 @@ async def on_report_group(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         full_name = " ".join(filter(None, [chat.first_name, chat.last_name])) or "Unknown"
     except Exception:
         pass
+
+    # Protect bot owner/admins from being reported
+    role = await resolve_protected_role(tg_id, username, bot=context.bot)
+    if role:
+        await msg.reply_text(em(protected_block_message(role)), parse_mode="HTML")
+        return
 
     # Duplicate check
     from bot.db import scammer_exists

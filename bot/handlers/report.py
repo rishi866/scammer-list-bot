@@ -14,7 +14,7 @@ from telegram.ext import (
 )
 
 from bot.db import add_report
-from bot.services.admins import get_admin_ids
+from bot.services.admins import get_admin_ids, resolve_protected_role, protected_block_message
 from bot.services.emoji_fx import em
 
 logger = logging.getLogger(__name__)
@@ -39,11 +39,21 @@ async def report_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 async def report_target(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     raw = update.message.text.strip()
     if raw.lstrip("@").isdigit():
-        context.user_data["report_target_id"]       = int(raw.lstrip("@"))
-        context.user_data["report_target_username"]  = None
+        target_id       = int(raw.lstrip("@"))
+        target_username = None
     else:
-        context.user_data["report_target_id"]       = None
-        context.user_data["report_target_username"]  = raw.lstrip("@")
+        target_id       = None
+        target_username = raw.lstrip("@")
+
+    # Protect bot owner/admins from being reported
+    role = await resolve_protected_role(target_id, target_username, bot=context.bot)
+    if role:
+        await update.message.reply_text(em(protected_block_message(role)), parse_mode="HTML")
+        context.user_data.clear()
+        return ConversationHandler.END
+
+    context.user_data["report_target_id"]      = target_id
+    context.user_data["report_target_username"] = target_username
 
     await update.message.reply_text(
         em("⚠️ Step 2/3 — What did they do?\nDescribe the scam briefly."),

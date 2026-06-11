@@ -20,6 +20,7 @@ from __future__ import annotations
 import logging
 import os
 from functools import wraps
+from typing import Optional
 
 from telegram import Update
 from telegram.ext import ContextTypes
@@ -126,6 +127,66 @@ async def list_all_admins() -> list[dict]:
         seen.add(aid)
 
     return out
+
+
+# ── Protect owner/admins from being reported as scammers ──────────────────────
+
+async def resolve_protected_role(
+    telegram_id: Optional[int] = None,
+    username: Optional[str] = None,
+    bot=None,
+) -> Optional[str]:
+    """Return "owner" / "admin" if telegram_id or @username belongs to the
+    bot's owner or one of its admins, else None.
+
+    - telegram_id is checked directly when known.
+    - For @username-only targets (no resolved ID yet), first tries the
+      passive bot_users cache (built from group activity), then — if a
+      `bot` instance is given — falls back to a live get_chat("@username")
+      lookup. Either way, the result is checked against the same owner/admin
+      ID sets.
+    """
+    def _role(uid: Optional[int]) -> Optional[str]:
+        if not uid:
+            return None
+        if is_owner(uid):
+            return "owner"
+        if uid in get_admin_ids():
+            return "admin"
+        return None
+
+    role = _role(telegram_id)
+    if role:
+        return role
+
+    if username:
+        uname = username.lstrip("@")
+        from bot.db import get_bot_user_by_username
+        cached = await get_bot_user_by_username(uname)
+        role = _role(cached["telegram_id"]) if cached else None
+        if role:
+            return role
+
+        if bot is not None:
+            try:
+                chat = await bot.get_chat(f"@{uname}")
+                role = _role(chat.id)
+                if role:
+                    return role
+            except Exception:
+                pass
+
+    return None
+
+
+def protected_block_message(role: str) -> str:
+    """User-facing message shown when a report/add target is the owner/admin."""
+    who = "👑 the <b>owner</b>" if role == "owner" else "🛠 an <b>admin</b>"
+    return (
+        f"🚫 <b>Action blocked</b>\n\n"
+        f"This account belongs to {who} of this bot — it can't be reported, "
+        f"added, or listed as a scammer."
+    )
 
 
 # ── Decorator: owner-only commands (admin management) ─────────────────────────
