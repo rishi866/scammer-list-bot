@@ -25,6 +25,8 @@ from bot.db import (
     get_scammers_missing_id,
     update_scammer_telegram_id,
     update_scammer_field,
+    update_scammer_username,
+    touch_username_check,
     EDITABLE_FIELDS,
     scammer_exists,
     search_by_telegram_id,
@@ -282,6 +284,85 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         ),
         parse_mode="HTML",
     )
+
+
+# ── /refreshusername ─────────────────────────────────────────────────────────
+
+_REFRESH_USAGE = (
+    "🔄 <b>Usage:</b> /refreshusername &lt;#&gt;\n"
+    "(use the <b>#</b> shown in /scammer_list)\n\n"
+    "Re-checks this scammer's current username &amp; name on Telegram right "
+    "now — instead of waiting for the automatic 6-hour refresh."
+)
+
+
+@admin_only
+async def refreshusername_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    args = context.args
+    if not args or not args[0].isdigit():
+        await update.message.reply_text(em(_REFRESH_USAGE), parse_mode="HTML")
+        return
+
+    seq   = int(args[0])
+    entry = await get_scammer_by_seq(seq)
+    if not entry:
+        await update.message.reply_text(em(f"❌ No scammer at position #{seq}."), parse_mode="HTML")
+        return
+
+    tid = entry.get("telegram_id")
+    if not tid:
+        await update.message.reply_text(
+            em(f"⚠️ #{seq} has no Telegram ID on file — nothing to refresh.\nUse <code>/edit {seq} id &lt;telegram_id&gt;</code> first."),
+            parse_mode="HTML",
+        )
+        return
+
+    try:
+        chat = await context.bot.get_chat(tid)
+    except TelegramError as e:
+        await update.message.reply_text(
+            em(
+                f"⚠️ <b>Could not refresh #{seq}</b>\n\n"
+                f"Telegram says: <code>{e}</code>\n\n"
+                "This usually means the bot has no access to this user "
+                "(they've never /start'd the bot and haven't been seen "
+                "joining a group the bot is in). Use /edit to set the "
+                "username/name manually instead — it'll auto-sync the "
+                "moment the bot does see them."
+            ),
+            parse_mode="HTML",
+        )
+        return
+
+    old_username = entry.get("username")
+    old_name     = entry.get("name")
+    new_username = chat.username
+    new_name     = " ".join(filter(None, [chat.first_name, chat.last_name])) or None
+
+    changed = []
+    if new_username != old_username:
+        await update_scammer_username(entry["id"], new_username, old_username)
+        changed.append(
+            f"📝 Username : {f'@{old_username}' if old_username else '—'} → "
+            f"{f'@{new_username}' if new_username else '—'}"
+        )
+    else:
+        await touch_username_check(entry["id"])
+
+    if new_name and new_name != old_name:
+        await update_scammer_field(entry["id"], "name", new_name)
+        changed.append(f"👤 Name     : {old_name or '—'} → {new_name}")
+
+    if changed:
+        await update.message.reply_text(
+            em(f"✅ <b>#{seq} refreshed from Telegram!</b>\n\n" + "\n".join(changed)),
+            parse_mode="HTML",
+        )
+    else:
+        await update.message.reply_text(
+            em(f"ℹ️ #{seq} — already up to date (no changes on Telegram)."),
+            parse_mode="HTML",
+        )
 
 
 # ── /list ─────────────────────────────────────────────────────────────────────

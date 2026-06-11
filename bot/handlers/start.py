@@ -49,6 +49,8 @@ def _welcome_text(count: int, is_admin: bool = False, is_owner_user: bool = Fals
             "\n\n<b>🛠 Admin Tools</b>\n"
             "• /pending · /approve &lt;#&gt; · /reject &lt;#&gt; — review submissions\n"
             "• /edit &lt;#&gt; &lt;field&gt; &lt;value&gt; — fix reason/severity/username/name/id\n"
+            "• /refreshusername &lt;#&gt; — re-check a scammer's username/name "
+            "from Telegram right now (no 6h wait)\n"
             "• /remove &lt;#&gt; · /list · /stats · /fixids · /setid\n"
             "• /addchannel · /listchannels · /removechannel &lt;#&gt; — require "
             "users to join channel(s)/group(s) before using the bot in PM\n"

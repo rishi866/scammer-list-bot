@@ -53,6 +53,7 @@ from bot.handlers.admin        import (
     stats_command,
     fixids_command,
     setid_command,
+    refreshusername_command,
 )
 from bot.services.admins             import refresh_admin_cache
 from bot.services.username_refresher import username_refresh_loop
@@ -116,6 +117,7 @@ async def run() -> None:
     app.add_handler(CommandHandler("stats",         stats_command))
     app.add_handler(CommandHandler("fixids",        fixids_command))
     app.add_handler(CommandHandler("setid",         setid_command))
+    app.add_handler(CommandHandler("refreshusername", refreshusername_command))
     # /addid is registered in register_forward_handlers (handles both admin+user)
 
     app.add_handler(CommandHandler("addtrusted",    addtrusted_cmd))
