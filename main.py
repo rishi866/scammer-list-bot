@@ -59,6 +59,7 @@ from bot.services.admins             import refresh_admin_cache
 from bot.services.username_refresher import username_refresh_loop
 from bot.services.broadcaster        import on_bot_member_update
 from bot.services.weekly_digest      import weekly_digest_loop
+from bot.services.user_tracker       import track_message_user, track_member_join
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 
@@ -148,6 +149,12 @@ async def run() -> None:
 
     # Auto-check new members against scammer list
     app.add_handler(ChatMemberHandler(on_new_member, ChatMemberHandler.CHAT_MEMBER))
+
+    # ── Passive "seen users" cache (low priority, never blocks anything) ──────
+    # Builds bot_users from normal group activity — fallback for /addid,
+    # /refreshusername etc. when get_chat() can't reach a user directly.
+    app.add_handler(MessageHandler(filters.ALL & filters.ChatType.GROUPS, track_message_user), group=10)
+    app.add_handler(ChatMemberHandler(track_member_join, ChatMemberHandler.CHAT_MEMBER), group=10)
 
     # ── Bot command menus ─────────────────────────────────────────────────────
     group_cmds = [

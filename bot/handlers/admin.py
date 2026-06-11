@@ -320,15 +320,33 @@ async def refreshusername_command(update: Update, context: ContextTypes.DEFAULT_
     try:
         chat = await context.bot.get_chat(tid)
     except TelegramError as e:
+        # Fallback: check the passive "seen users" cache (built from group
+        # messages/joins) — bot may know this person even if get_chat() can't
+        # reach them right now.
+        from bot.db import get_bot_user
+        cached  = await get_bot_user(tid)
+        hint    = ""
+        if cached and (cached.get("username") or cached.get("full_name")):
+            cu   = f"@{cached['username']}" if cached.get("username") else "—"
+            cn   = cached.get("full_name") or "—"
+            hint = (
+                f"\n\n📦 <b>But found in seen-users cache:</b>\n"
+                f"   Username: {cu}\n"
+                f"   Name    : {cn}\n\n"
+                f"<code>/edit {seq} username {cached.get('username') or ''}</code>\n"
+                f"<code>/edit {seq} name {cn}</code>"
+            )
         await update.message.reply_text(
             em(
                 f"⚠️ <b>Could not refresh #{seq}</b>\n\n"
                 f"Telegram says: <code>{e}</code>\n\n"
                 "This usually means the bot has no access to this user "
                 "(they've never /start'd the bot and haven't been seen "
-                "joining a group the bot is in). Use /edit to set the "
-                "username/name manually instead — it'll auto-sync the "
-                "moment the bot does see them."
+                "joining a group the bot is in)."
+                f"{hint}"
+                + ("" if hint else "\n\nUse /edit to set the username/name "
+                   "manually instead — it'll auto-sync the moment the bot "
+                   "does see them.")
             ),
             parse_mode="HTML",
         )

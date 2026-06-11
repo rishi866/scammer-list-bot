@@ -655,3 +655,17 @@ async def upsert_bot_user(telegram_id: int, username: Optional[str], full_name: 
         telegram_id, username, full_name,
     )
     return bool(row["is_new"])
+
+
+async def get_bot_user(telegram_id: int) -> Optional[dict]:
+    """Look up a passively-cached (telegram_id, username, full_name).
+
+    Populated whenever the bot sees this user — they /start the bot, send a
+    message in any group the bot is in, or join such a group. Used as a
+    fallback when get_chat() can't reach a user directly (e.g. /addid for
+    someone who never DM'd the bot but is active in a shared group).
+    """
+    pool = await _get_pool()
+    return _row(await pool.fetchrow(
+        "SELECT * FROM bot_users WHERE telegram_id = $1", telegram_id
+    ))

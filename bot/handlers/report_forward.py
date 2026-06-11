@@ -108,8 +108,22 @@ async def on_addid_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     except Exception:
         pass
 
-    uname_str  = f"@{username}" if username else "—"
-    fetch_note = "✅ Details fetched from Telegram" if fetched else "⚠️ Could not fetch — tracked by ID only"
+    if fetched:
+        fetch_note = "✅ Details fetched from Telegram"
+    else:
+        # Fallback: bot may have passively seen this user before (a message
+        # or join in a group the bot is in), even though get_chat() can't
+        # reach them directly right now.
+        from bot.db import get_bot_user
+        cached = await get_bot_user(telegram_id)
+        if cached and (cached.get("username") or cached.get("full_name")):
+            username   = cached.get("username")
+            full_name  = cached.get("full_name") or "Unknown"
+            fetch_note = "📦 Details from bot's seen-users cache (last seen earlier)"
+        else:
+            fetch_note = "⚠️ Could not fetch — tracked by ID only"
+
+    uname_str = f"@{username}" if username else "—"
 
     # ── ADMIN: direct add + kick ──────────────────────────────────────────────
     if _is_admin(uid):
