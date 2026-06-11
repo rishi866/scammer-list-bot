@@ -317,12 +317,37 @@ async def refreshusername_command(update: Update, context: ContextTypes.DEFAULT_
         )
         return
 
+    chat = None
+    err  = None
     try:
         chat = await context.bot.get_chat(tid)
     except TelegramError as e:
-        # Fallback: check the passive "seen users" cache (built from group
-        # messages/joins) — bot may know this person even if get_chat() can't
-        # reach them right now.
+        err = e
+
+    # Fallback: get_chat(id) needs an "access hash" the bot often loses once
+    # a scammer is kicked/banned. get_chat("@username") is a *global*
+    # username-directory lookup and can succeed even then.
+    reassign_note = ""
+    if chat is None and entry.get("username"):
+        old_uname = entry["username"]
+        try:
+            by_uname = await context.bot.get_chat(f"@{old_uname}")
+            if by_uname.id == tid:
+                chat = by_uname  # same person — just refresh via @username
+            else:
+                reassign_note = (
+                    f"\n\n⚠️ <b>Heads up:</b> @{old_uname} ab kisi aur account "
+                    f"(ID <code>{by_uname.id}</code>) ka hai — is scammer ne shayad "
+                    f"username badal liya hai. Naya username pata chale to "
+                    f"<code>/edit {seq} username &lt;naya_username&gt;</code> chalana."
+                )
+        except TelegramError:
+            pass  # neither lookup worked — fall through to cache below
+
+    if chat is None:
+        # Final fallback: check the passive "seen users" cache (built from
+        # group messages/joins) — bot may know this person even if get_chat()
+        # can't reach them right now.
         from bot.db import get_bot_user
         cached  = await get_bot_user(tid)
         hint    = ""
@@ -339,14 +364,14 @@ async def refreshusername_command(update: Update, context: ContextTypes.DEFAULT_
         await update.message.reply_text(
             em(
                 f"⚠️ <b>Could not refresh #{seq}</b>\n\n"
-                f"Telegram says: <code>{e}</code>\n\n"
+                f"Telegram says: <code>{err}</code>\n\n"
                 "This usually means the bot has no access to this user "
                 "(they've never /start'd the bot and haven't been seen "
                 "joining a group the bot is in)."
-                f"{hint}"
-                + ("" if hint else "\n\nUse /edit to set the username/name "
-                   "manually instead — it'll auto-sync the moment the bot "
-                   "does see them.")
+                f"{hint}{reassign_note}"
+                + ("" if (hint or reassign_note) else "\n\nUse /edit to set "
+                   "the username/name manually instead — it'll auto-sync "
+                   "the moment the bot does see them.")
             ),
             parse_mode="HTML",
         )
@@ -373,12 +398,12 @@ async def refreshusername_command(update: Update, context: ContextTypes.DEFAULT_
 
     if changed:
         await update.message.reply_text(
-            em(f"✅ <b>#{seq} refreshed from Telegram!</b>\n\n" + "\n".join(changed)),
+            em(f"✅ <b>#{seq} refreshed from Telegram!</b>\n\n" + "\n".join(changed) + reassign_note),
             parse_mode="HTML",
         )
     else:
         await update.message.reply_text(
-            em(f"ℹ️ #{seq} — already up to date (no changes on Telegram)."),
+            em(f"ℹ️ #{seq} — already up to date (no changes on Telegram)." + reassign_note),
             parse_mode="HTML",
         )
 

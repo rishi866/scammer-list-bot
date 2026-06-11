@@ -1,4 +1,4 @@
-"""Auto-update scammer usernames via Telegram's getChat API.
+"""Auto-update scammer usernames/names via Telegram's getChat API.
 
 How it works
 ------------
@@ -7,24 +7,36 @@ their username after a scam, a lookup by @username fails.  By storing the
 ID and periodically calling bot.get_chat(id) we always have the latest
 username — and keep the full history of old ones.
 
+Fallback: get_chat(@username)
+------------------------------
+bot.get_chat(user_id) (raw numeric ID) only works when Telegram has an
+"access hash" for that user cached for our bot — i.e. the user has messaged
+the bot, or the bot has otherwise seen them in a group. Scammers are often
+kicked/banned, so this commonly fails even for entries that already have a
+username on file.
+
+bot.get_chat("@username") is a different, *global* lookup (the public
+username directory) and often succeeds even when the ID-based lookup
+doesn't. If it resolves to the SAME telegram_id, we use it to refresh the
+display name. If it resolves to a DIFFERENT id, the username has likely
+been reassigned/changed — we just log it for an admin to investigate.
+
 Limitations
 -----------
-bot.get_chat(user_id) only works when Telegram has the user in its cache
-for our bot, i.e. the user has messaged the bot, or is in a group/channel
-the bot is in.  If Telegram returns "Chat not found" we skip silently and
-retry on the next cycle.
+If get_chat() fails both ways (no access AND no/changed username), we skip
+silently and retry on the next cycle.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Optional
 
 from telegram import Bot
 from telegram.error import TelegramError
 
 from bot.db import (
     update_scammer_username,
+    update_scammer_field,
     touch_username_check,
     get_scammers_needing_refresh,
 )
@@ -35,23 +47,47 @@ REFRESH_INTERVAL_HOURS = 6   # how often the background loop runs
 BATCH_DELAY_SECONDS    = 1   # pause between individual getChat calls (rate-limit safety)
 
 
-async def refresh_one(bot: Bot, scammer: dict) -> Optional[str]:
-    """Fetch current Telegram username for one scammer and update DB.
+async def refresh_one(bot: Bot, scammer: dict) -> bool:
+    """Fetch current Telegram username/name for one scammer and update DB.
 
-    Returns the new username if it changed, None otherwise.
+    Returns True if anything (username or name) changed, False otherwise.
     """
-    tid = scammer.get("telegram_id")
+    tid   = scammer.get("telegram_id")
+    uname = scammer.get("username")
     if not tid:
-        return None
+        return False
 
+    chat = None
     try:
         chat = await bot.get_chat(tid)
     except TelegramError as e:
         logger.debug("get_chat(%s) failed: %s", tid, e)
-        return None
+
+    if chat is None and uname:
+        # ID-based lookup failed but we have a username on file — try the
+        # global username directory instead (see module docstring).
+        try:
+            by_uname = await bot.get_chat(f"@{uname}")
+            if by_uname.id == tid:
+                chat = by_uname
+            else:
+                logger.info(
+                    "Scammer #%s: @%s now belongs to a different account "
+                    "(ID %s, expected %s) — they may have changed usernames.",
+                    scammer["id"], uname, by_uname.id, tid,
+                )
+        except TelegramError as e:
+            logger.debug("get_chat(@%s) failed: %s", uname, e)
+
+    if chat is None:
+        return False
 
     new_username = chat.username  # None if user has no username set
     old_username = scammer.get("username")
+    new_name      = " ".join(filter(None, [chat.first_name, chat.last_name])) or None
+    old_name      = scammer.get("name")
+
+    changed = False
 
     if new_username != old_username:
         logger.info(
@@ -61,14 +97,20 @@ async def refresh_one(bot: Bot, scammer: dict) -> Optional[str]:
             f"@{new_username}" if new_username else "—",
         )
         await update_scammer_username(scammer["id"], new_username, old_username)
-        return new_username
-    else:
+        changed = True
+
+    if new_name and new_name != old_name:
+        await update_scammer_field(scammer["id"], "name", new_name)
+        changed = True
+
+    if not changed:
         await touch_username_check(scammer["id"])
-        return None
+
+    return changed
 
 
 async def refresh_batch(bot: Bot) -> int:
-    """Refresh one stale batch. Returns number of usernames that changed."""
+    """Refresh one stale batch. Returns number of scammers that changed."""
     scammers = await get_scammers_needing_refresh(
         stale_hours=REFRESH_INTERVAL_HOURS, batch=100
     )
@@ -77,8 +119,7 @@ async def refresh_batch(bot: Bot) -> int:
 
     changed = 0
     for scammer in scammers:
-        result = await refresh_one(bot, scammer)
-        if result is not None:
+        if await refresh_one(bot, scammer):
             changed += 1
         await asyncio.sleep(BATCH_DELAY_SECONDS)
 
