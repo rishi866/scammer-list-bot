@@ -8,7 +8,7 @@ from telegram.error import TelegramError
 
 from bot.db import (
     search_by_telegram_id, search_by_username,
-    search_by_name,
+    search_by_name, search_by_payment_info,
     update_scammer_username, touch_username_check,
 )
 from bot.services.emoji_fx import em
@@ -34,6 +34,7 @@ def _format_entry(e: dict) -> str:
         f"  {sev_icon} Severity: {sev.capitalize()}\n"
         f"  ⚠️ Reason: {e['reason']}\n"
         f"  🔗 Proof: {e.get('proof') or '—'}\n"
+        f"  💳 Payment: {e.get('payment_info') or '—'}\n"
         f"  📅 Added: {str(e.get('added_at') or '')[:10]}"
     )
 
@@ -63,7 +64,7 @@ async def check_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     args = context.args
     if not args:
         await update.message.reply_text(
-            em("🔍 Usage:\n  /check @username\n  /check 123456789  (Telegram ID)\n  /check John Doe  (search by name)"),
+            em("🔍 Usage:\n  /check @username\n  /check 123456789  (Telegram ID)\n  /check John Doe  (search by name)\n  /check <binance ID / UPI / wallet address>  (search by payment info)"),
             parse_mode="HTML",
         )
         return
@@ -111,6 +112,10 @@ async def check_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         if not results:
             name_query = " ".join(args).strip()
             results    = await search_by_name(name_query)
+
+    # Final fallback: search by payment info (Binance ID / UPI / wallet address)
+    if not results:
+        results = await search_by_payment_info(query)
 
     if not results:
         await update.message.reply_text(

@@ -127,6 +127,7 @@ async def _approve(
         added_by     = query.from_user.id,
         severity     = severity,
         proof_file_id= report.get("proof_file_id"),
+        payment_info = report.get("payment_info"),
     )
     await update_report_status(report_id, "approved")
 
@@ -161,6 +162,7 @@ async def _approve(
         report["reason"],
         severity=severity,
         skip_group_id=group_chat_id,
+        payment_info=report.get("payment_info"),
     )
 
     # Kick scammer from all groups the bot is in

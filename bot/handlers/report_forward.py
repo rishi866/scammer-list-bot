@@ -28,18 +28,21 @@ from bot.services.emoji_fx import em
 logger = logging.getLogger(__name__)
 
 # ── user_data keys ────────────────────────────────────────────────────────────
-_STATE  = "fwd_state"
-_ID     = "fwd_id"
-_UNAME  = "fwd_uname"
-_NAME   = "fwd_name"
-_REASON = "fwd_reason"
+_STATE   = "fwd_state"
+_ID      = "fwd_id"
+_UNAME   = "fwd_uname"
+_NAME    = "fwd_name"
+_REASON  = "fwd_reason"
+_PAYMENT = "fwd_payment"
 
 # States — forward report flow
 S_REASON     = "reason"
 S_ID         = "id"
+S_PAYMENT    = "payment"
 S_PROOF      = "proof"
-# State — /addid user flow (only proof needed, ID already known)
-S_ADDID_PROOF = "addid_proof"
+# States — /addid user flow (ID already known)
+S_ADDID_PAYMENT = "addid_payment"
+S_ADDID_PROOF   = "addid_proof"
 
 
 def _is_admin(uid: int) -> bool:
@@ -62,7 +65,7 @@ def _extract_fwd_user(msg):
 
 
 def _clear(ud: dict) -> None:
-    for k in [_STATE, _ID, _UNAME, _NAME, _REASON]:
+    for k in [_STATE, _ID, _UNAME, _NAME, _REASON, _PAYMENT]:
         ud.pop(k, None)
 
 
@@ -209,9 +212,9 @@ async def on_addid_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         )
         return
 
-    # PRIVATE: save state, ask for proof
+    # PRIVATE: save state, ask for payment info then proof
     ud = context.user_data
-    ud[_STATE]  = S_ADDID_PROOF
+    ud[_STATE]  = S_ADDID_PAYMENT
     ud[_ID]     = telegram_id
     ud[_UNAME]  = username
     ud[_NAME]   = full_name
@@ -226,7 +229,7 @@ async def on_addid_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             f"{history_line}\n"
             f"⚠️ Reason   : {reason}\n"
             f"ℹ️ {fetch_note}\n\n"
-            f"📸 <b>Send proof</b> (screenshot/photo) or /skip\n"
+            f"💳 <b>Did they ask for payment?</b> Send the Binance ID / UPI / wallet address they used, or /skip\n"
             f"/cancel to abort"
         ),
         parse_mode="HTML",
@@ -404,7 +407,18 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             ud[_ID] = int(text.lstrip("@"))
         elif text.startswith("@"):
             ud[_UNAME] = text.lstrip("@")
-        ud[_STATE] = S_PROOF
+        ud[_STATE] = S_PAYMENT
+        await update.message.reply_text(
+            em(
+                "💳 <b>Did they ask for payment?</b>\n"
+                "Send the Binance ID / UPI / wallet address they used, or /skip if not applicable."
+            ),
+            parse_mode="HTML",
+        )
+
+    elif state == S_PAYMENT:
+        ud[_PAYMENT] = None if text.lower() == "none" else text
+        ud[_STATE]   = S_PROOF
         await update.message.reply_text(
             em("📸 <b>Send proof</b> (screenshot/photo). No proof? Send /skip"),
             parse_mode="HTML",
@@ -412,6 +426,14 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     elif state == S_PROOF:
         await _finish_report(update, context, proof_file_id=None)
+
+    elif state == S_ADDID_PAYMENT:
+        ud[_PAYMENT] = None if text.lower() == "none" else text
+        ud[_STATE]   = S_ADDID_PROOF
+        await update.message.reply_text(
+            em("📸 <b>Send proof</b> (screenshot/photo). No proof? Send /skip"),
+            parse_mode="HTML",
+        )
 
 
 async def on_skip(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -425,6 +447,15 @@ async def on_skip(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     if state == S_ID:
+        ud[_STATE] = S_PAYMENT
+        await update.message.reply_text(
+            em(
+                "💳 <b>Did they ask for payment?</b>\n"
+                "Send the Binance ID / UPI / wallet address they used, or /skip if not applicable."
+            ),
+            parse_mode="HTML",
+        )
+    elif state == S_PAYMENT:
         ud[_STATE] = S_PROOF
         await update.message.reply_text(
             em("📸 <b>Send proof</b> (screenshot/photo). No proof? Send /skip"),
@@ -432,6 +463,12 @@ async def on_skip(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
     elif state == S_PROOF:
         await _finish_report(update, context, proof_file_id=None)
+    elif state == S_ADDID_PAYMENT:
+        ud[_STATE] = S_ADDID_PROOF
+        await update.message.reply_text(
+            em("📸 <b>Send proof</b> (screenshot/photo). No proof? Send /skip"),
+            parse_mode="HTML",
+        )
     elif state == S_ADDID_PROOF:
         await _finish_addid_report(update, context, proof_file_id=None)
 
@@ -472,6 +509,7 @@ async def _finish_report(update, context, proof_file_id):
     fwd_uname = ud.get(_UNAME)
     fwd_name  = ud.get(_NAME, "Unknown")
     reason    = ud.get(_REASON, "No reason provided")
+    payment   = ud.get(_PAYMENT)
 
     report_id = await add_report(
         reporter_id      = submitter.id,
@@ -483,10 +521,11 @@ async def _finish_report(update, context, proof_file_id):
         proof            = None,
         group_chat_id    = None,
         proof_file_id    = proof_file_id,
+        payment_info     = payment,
     )
 
     await _notify_admins(context, report_id, fwd_id, fwd_uname, fwd_name, reason,
-                         submitter, proof_file_id, source="message forward")
+                         submitter, proof_file_id, source="message forward", payment_info=payment)
     _clear(context.user_data)
     await update.message.reply_text(
         em(f"✅ <b>Report #{report_id} submitted!</b>\nThank you for helping keep the community safe. 🙏"),
@@ -504,6 +543,7 @@ async def _finish_addid_report(update, context, proof_file_id):
     uname     = ud.get(_UNAME)
     name      = ud.get(_NAME, "Unknown")
     reason    = ud.get(_REASON, "No reason provided")
+    payment   = ud.get(_PAYMENT)
 
     report_id = await add_report(
         reporter_id      = submitter.id,
@@ -515,10 +555,11 @@ async def _finish_addid_report(update, context, proof_file_id):
         proof            = None,
         group_chat_id    = None,
         proof_file_id    = proof_file_id,
+        payment_info     = payment,
     )
 
     await _notify_admins(context, report_id, tg_id, uname, name, reason,
-                         submitter, proof_file_id, source="/addid")
+                         submitter, proof_file_id, source="/addid", payment_info=payment)
     _clear(context.user_data)
     await update.message.reply_text(
         em(f"✅ <b>Report #{report_id} submitted!</b>\nThank you for helping keep the community safe. 🙏"),
@@ -527,7 +568,7 @@ async def _finish_addid_report(update, context, proof_file_id):
 
 
 async def _notify_admins(context, report_id, tg_id, uname, name, reason,
-                         submitter, proof_file_id, source=""):
+                         submitter, proof_file_id, source="", payment_info=None):
     uname_str    = f"@{uname}" if uname else "—"
     reporter_str = f"@{submitter.username}" if submitter.username else str(submitter.id)
     proof_line   = "\n📸 <b>Proof attached</b>" if proof_file_id else "\n❌ No proof"
@@ -539,7 +580,8 @@ async def _notify_admins(context, report_id, tg_id, uname, name, reason,
         f"  👤 Name     : <b>{name}</b>\n"
         f"  📝 Username : {uname_str}\n"
         f"  🔑 Tele ID  : <code>{tg_id or '—'}</code>\n\n"
-        f"⚠️ <b>Reason:</b> {reason}{proof_line}\n\n"
+        f"⚠️ <b>Reason:</b> {reason}\n"
+        f"💳 <b>Payment:</b> {payment_info or '—'}{proof_line}\n\n"
         f"📤 <b>Reporter:</b> {reporter_str} (ID: <code>{submitter.id}</code>)\n\n"
         f"👇 Approve with severity or ignore:"
     )

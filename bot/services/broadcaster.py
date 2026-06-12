@@ -102,6 +102,7 @@ async def broadcast_scammer(
     reason: str,
     severity: str = "medium",
     skip_group_id: Optional[int] = None,
+    payment_info: Optional[str] = None,
 ) -> int:
     """Send scammer confirmed alert to all active groups. Returns count sent."""
 
@@ -112,13 +113,19 @@ async def broadcast_scammer(
     sev_icon = {"high": "🔴", "medium": "🟡", "low": "🟢"}.get(severity, "🟡")
     uname    = f"@{username}" if username else "—"
     tid      = f"<code>{telegram_id}</code>" if telegram_id else "—"
+    payment_line = (
+        f"\n💳 <b>Payment used:</b> <code>{payment_info}</code>\n"
+        f"🚫 <b>DO NOT</b> send any payment to this ID/address!\n"
+        if payment_info else ""
+    )
 
     text = em(
         f"🚨 <b>Scammer Alert — #{scammer_id}</b>\n\n"
         f"📝 Username : {uname}\n"
         f"🔑 Tele ID  : {tid}\n"
         f"{sev_icon} Severity  : {severity.capitalize()}\n"
-        f"⚠️ Reason   : {reason}\n\n"
+        f"⚠️ Reason   : {reason}\n"
+        f"{payment_line}\n"
         f"📋 Use /scammer_list to see the full list.\n"
         f"🔍 Use /check @username to verify anyone."
     )

@@ -69,7 +69,8 @@ async def init_db() -> None:
                 proof               TEXT,
                 added_by            BIGINT NOT NULL,
                 added_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                notes               TEXT
+                notes               TEXT,
+                payment_info        TEXT
             );
 
             CREATE INDEX IF NOT EXISTS idx_scammers_telegram_id ON scammers(telegram_id);
@@ -84,6 +85,7 @@ async def init_db() -> None:
                 target_full_name  TEXT,
                 reason            TEXT NOT NULL,
                 proof             TEXT,
+                payment_info      TEXT,
                 group_chat_id     BIGINT,
                 status            TEXT NOT NULL DEFAULT 'pending',
                 reported_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -169,6 +171,8 @@ async def init_db() -> None:
             ("reports",  "group_chat_id",       "BIGINT"),
             ("reports",  "proof_file_id",       "TEXT"),
             ("bot_users", "username_history",   "TEXT[] DEFAULT '{}'"),
+            ("scammers", "payment_info",        "TEXT"),
+            ("reports",  "payment_info",        "TEXT"),
         ]:
             await conn.execute(
                 f"ALTER TABLE {tbl} ADD COLUMN IF NOT EXISTS {col} {definition};"
@@ -189,14 +193,15 @@ async def add_scammer(
     notes: Optional[str] = None,
     severity: str = "medium",
     proof_file_id: Optional[str] = None,
+    payment_info: Optional[str] = None,
 ) -> int:
     pool = await _get_pool()
     row = await pool.fetchrow(
         """INSERT INTO scammers
-           (telegram_id, username, name, reason, proof, added_by, notes, severity, proof_file_id)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+           (telegram_id, username, name, reason, proof, added_by, notes, severity, proof_file_id, payment_info)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
            RETURNING id""",
-        telegram_id, username, name, reason, proof, added_by, notes, severity, proof_file_id,
+        telegram_id, username, name, reason, proof, added_by, notes, severity, proof_file_id, payment_info,
     )
     return row["id"]
 
@@ -252,14 +257,16 @@ async def count_scammers() -> int:
 
 # Maps the user-facing field name (used in /edit) → actual DB column.
 EDITABLE_FIELDS = {
-    "reason":      "reason",
-    "severity":    "severity",
-    "username":    "username",
-    "name":        "name",
-    "id":          "telegram_id",
-    "telegram_id": "telegram_id",
-    "notes":       "notes",
-    "proof":       "proof",
+    "reason":       "reason",
+    "severity":     "severity",
+    "username":     "username",
+    "name":         "name",
+    "id":           "telegram_id",
+    "telegram_id":  "telegram_id",
+    "notes":        "notes",
+    "proof":        "proof",
+    "payment":      "payment_info",
+    "payment_info": "payment_info",
 }
 
 
@@ -290,16 +297,17 @@ async def add_report(
     proof: Optional[str],
     group_chat_id: Optional[int] = None,
     proof_file_id: Optional[str] = None,
+    payment_info: Optional[str] = None,
 ) -> int:
     pool = await _get_pool()
     row = await pool.fetchrow(
         """INSERT INTO reports
            (reporter_id, reporter_username, target_id, target_username,
-            target_full_name, reason, proof, group_chat_id, proof_file_id)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            target_full_name, reason, proof, group_chat_id, proof_file_id, payment_info)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
            RETURNING id""",
         reporter_id, reporter_username, target_id, target_username,
-        target_full_name, reason, proof, group_chat_id, proof_file_id,
+        target_full_name, reason, proof, group_chat_id, proof_file_id, payment_info,
     )
     return row["id"]
 
@@ -444,6 +452,15 @@ async def search_by_name(name: str) -> list[dict]:
     pool = await _get_pool()
     return _rows(await pool.fetch(
         "SELECT * FROM scammers WHERE LOWER(name) LIKE $1", f"%{name.lower()}%"
+    ))
+
+
+async def search_by_payment_info(text: str) -> list[dict]:
+    """Find scammers whose payment_info (Binance ID, UPI, wallet address, etc.) contains text."""
+    pool = await _get_pool()
+    return _rows(await pool.fetch(
+        "SELECT * FROM scammers WHERE payment_info IS NOT NULL AND LOWER(payment_info) LIKE $1",
+        f"%{text.lower()}%",
     ))
 
 

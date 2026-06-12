@@ -43,7 +43,7 @@ from bot.services.emoji_fx import em
 
 logger = logging.getLogger(__name__)
 
-ADD_TARGET, ADD_NAME, ADD_REASON, ADD_PROOF, ADD_NOTES = range(5)
+ADD_TARGET, ADD_NAME, ADD_REASON, ADD_PROOF, ADD_PAYMENT, ADD_NOTES = range(6)
 
 
 def admin_only(func: Callable):
@@ -62,7 +62,7 @@ def admin_only(func: Callable):
 async def add_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text(
         em(
-            "➕ <b>Add Scammer</b> — Step 1/5\n\n"
+            "➕ <b>Add Scammer</b> — Step 1/6\n\n"
             "Send their <b>@username</b> or <b>Telegram ID</b>.\n"
             "Type <b>none</b> if unknown.\n"
             "/cancel to abort."
@@ -98,7 +98,7 @@ async def add_target(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
                     f"  👤 Name: <b>{full_name or '—'}</b>\n"
                     f"  📝 Username: {uname}\n"
                     f"  🔑 ID: <code>{chat.id}</code>\n\n"
-                    f"👤 Step 2/5 — Confirm or change their full name\n"
+                    f"👤 Step 2/6 — Confirm or change their full name\n"
                     f"(Send <b>auto</b> to keep: <b>{full_name or '—'}</b>):"
                 ),
                 parse_mode="HTML",
@@ -114,7 +114,7 @@ async def add_target(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             context.user_data["add_target_name"] = None
             await update.message.reply_text(
                 em(f"⚠️ Could not fetch from Telegram (<code>{e}</code>).\n\n"
-                   f"👤 Step 2/5 — Enter their full name manually:"),
+                   f"👤 Step 2/6 — Enter their full name manually:"),
                 parse_mode="HTML",
             )
 
@@ -139,14 +139,14 @@ async def add_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         context.user_data["add_name"] = context.user_data["add_target_name"]
     else:
         context.user_data["add_name"] = raw
-    await update.message.reply_text(em("⚠️ Step 3/5 — Reason for listing:"), parse_mode="HTML")
+    await update.message.reply_text(em("⚠️ Step 3/6 — Reason for listing:"), parse_mode="HTML")
     return ADD_REASON
 
 
 async def add_reason(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["add_reason"] = update.message.text.strip()
     await update.message.reply_text(
-        em("🔗 Step 4/5 — Proof link or description (or <b>none</b>):"),
+        em("🔗 Step 4/6 — Proof link or description (or <b>none</b>):"),
         parse_mode="HTML",
     )
     return ADD_PROOF
@@ -156,7 +156,20 @@ async def add_proof(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     raw = update.message.text.strip()
     context.user_data["add_proof"] = None if raw.lower() == "none" else raw
     await update.message.reply_text(
-        em("📝 Step 5/5 — Additional notes (or <b>none</b>):"),
+        em(
+            "💳 Step 5/6 — Payment info (Binance ID / UPI / wallet address) they used,\n"
+            "or <b>none</b> if not applicable:"
+        ),
+        parse_mode="HTML",
+    )
+    return ADD_PAYMENT
+
+
+async def add_payment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    raw = update.message.text.strip()
+    context.user_data["add_payment"] = None if raw.lower() == "none" else raw
+    await update.message.reply_text(
+        em("📝 Step 6/6 — Additional notes (or <b>none</b>):"),
         parse_mode="HTML",
     )
     return ADD_NOTES
@@ -167,13 +180,14 @@ async def add_notes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     notes = None if raw.lower() == "none" else raw
 
     scammer_id = await add_scammer(
-        telegram_id = context.user_data.get("add_target_id"),
-        username    = context.user_data.get("add_target_uname"),
-        name        = context.user_data["add_name"],
-        reason      = context.user_data["add_reason"],
-        proof       = context.user_data.get("add_proof"),
-        added_by    = update.effective_user.id,
-        notes       = notes,
+        telegram_id  = context.user_data.get("add_target_id"),
+        username     = context.user_data.get("add_target_uname"),
+        name         = context.user_data["add_name"],
+        reason       = context.user_data["add_reason"],
+        proof        = context.user_data.get("add_proof"),
+        added_by     = update.effective_user.id,
+        notes        = notes,
+        payment_info = context.user_data.get("add_payment"),
     )
     await update.message.reply_text(
         em(f"✅ Scammer added as <b>#{scammer_id}</b>."),
@@ -194,11 +208,12 @@ def build_add_handler() -> ConversationHandler:
     return ConversationHandler(
         entry_points=[CommandHandler("add", add_start, filters=filters.ChatType.PRIVATE)],
         states={
-            ADD_TARGET: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_target)],
-            ADD_NAME:   [MessageHandler(filters.TEXT & ~filters.COMMAND, add_name)],
-            ADD_REASON: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_reason)],
-            ADD_PROOF:  [MessageHandler(filters.TEXT & ~filters.COMMAND, add_proof)],
-            ADD_NOTES:  [MessageHandler(filters.TEXT & ~filters.COMMAND, add_notes)],
+            ADD_TARGET:  [MessageHandler(filters.TEXT & ~filters.COMMAND, add_target)],
+            ADD_NAME:    [MessageHandler(filters.TEXT & ~filters.COMMAND, add_name)],
+            ADD_REASON:  [MessageHandler(filters.TEXT & ~filters.COMMAND, add_reason)],
+            ADD_PROOF:   [MessageHandler(filters.TEXT & ~filters.COMMAND, add_proof)],
+            ADD_PAYMENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_payment)],
+            ADD_NOTES:   [MessageHandler(filters.TEXT & ~filters.COMMAND, add_notes)],
         },
         fallbacks=[CommandHandler("cancel", add_cancel)],
     )
@@ -240,12 +255,13 @@ async def remove_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 _EDIT_USAGE = (
     "✏️ <b>Usage:</b> /edit &lt;#&gt; &lt;field&gt; &lt;value&gt;\n"
     "(use the <b>#</b> shown in /scammer_list)\n\n"
-    "<b>Fields:</b> reason · severity · username · name · id · notes · proof\n\n"
+    "<b>Fields:</b> reason · severity · username · name · id · notes · proof · payment\n\n"
     "<b>Examples:</b>\n"
     "<code>/edit 3 reason Fake crypto investment scheme</code>\n"
     "<code>/edit 3 severity high</code>\n"
     "<code>/edit 3 username new_username</code>\n"
-    "<code>/edit 3 id 123456789</code>"
+    "<code>/edit 3 id 123456789</code>\n"
+    "<code>/edit 3 payment binanceid123</code>"
 )
 
 
@@ -507,12 +523,13 @@ async def approve_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     scammer_id = await add_scammer(
-        telegram_id = report.get("target_id"),
-        username    = report.get("target_username"),
-        name        = report.get("target_full_name") or report.get("target_username") or str(report.get("target_id") or "Unknown"),
-        reason      = report["reason"],
-        proof       = report.get("proof"),
-        added_by    = update.effective_user.id,
+        telegram_id  = report.get("target_id"),
+        username     = report.get("target_username"),
+        name         = report.get("target_full_name") or report.get("target_username") or str(report.get("target_id") or "Unknown"),
+        reason       = report["reason"],
+        proof        = report.get("proof"),
+        added_by     = update.effective_user.id,
+        payment_info = report.get("payment_info"),
     )
     await update_report_status(rid, "approved")
     await update.message.reply_text(

@@ -303,6 +303,7 @@ async def _pending_page(request: web.Request) -> web.Response:
             f"<td>{_esc(target)}</td>"
             f"<td>{_esc(name)}</td>"
             f"<td>{_esc((r.get('reason') or '')[:80])}</td>"
+            f"<td>{_esc((r.get('payment_info') or '—')[:40])}</td>"
             f"<td>{_esc((r.get('proof') or '—')[:40])}</td>"
             f"<td>{_esc(reporter)}</td>"
             f"<td>{_when(r.get('reported_at'))}</td>"
@@ -311,7 +312,7 @@ async def _pending_page(request: web.Request) -> web.Response:
         )
 
     table = (
-        "<table><tr><th>ID</th><th>Target</th><th>Name</th><th>Reason</th><th>Proof</th>"
+        "<table><tr><th>ID</th><th>Target</th><th>Name</th><th>Reason</th><th>Payment</th><th>Proof</th>"
         "<th>Reporter</th><th>When</th><th>Actions</th></tr>" + "".join(rows) + "</table>"
     )
     body = _flash(request) + f"<h1>📨 Pending Reports ({len(reports)})</h1>" + table
@@ -351,6 +352,7 @@ async def _do_approve(bot, report: dict, severity: str) -> int | None:
         added_by      = 0,
         severity      = severity,
         proof_file_id = report.get("proof_file_id"),
+        payment_info  = report.get("payment_info"),
     )
     await update_report_status(report["id"], "approved")
 
@@ -378,6 +380,7 @@ async def _do_approve(bot, report: dict, severity: str) -> int | None:
     await broadcast_scammer(
         bot, scammer_id, report.get("target_username"), report.get("target_id"),
         report["reason"], severity=severity, skip_group_id=group_chat_id,
+        payment_info=report.get("payment_info"),
     )
 
     target_tg_id = report.get("target_id")
@@ -457,7 +460,7 @@ async def _pending_reject(request: web.Request) -> web.Response:
 
 # ── Scammers ─────────────────────────────────────────────────────────────────
 
-_EDIT_FIELDS = ("reason", "severity", "username", "name", "id", "notes", "proof")
+_EDIT_FIELDS = ("reason", "severity", "username", "name", "id", "notes", "proof", "payment_info")
 
 
 async def _scammers_page(request: web.Request) -> web.Response:
@@ -505,6 +508,7 @@ async def _scammers_page(request: web.Request) -> web.Response:
             f"<td class='mono'>{_esc(tid)}</td>"
             f"<td>{sev_badge}</td>"
             f"<td>{_esc((e.get('reason') or '')[:60])}</td>"
+            f"<td>{_esc((e.get('payment_info') or '—')[:40])}</td>"
             f"<td>{_when(e.get('added_at'))}</td>"
             f"<td class='actions'>{edit_form}{remove_form}</td>"
             "</tr>"
@@ -512,8 +516,8 @@ async def _scammers_page(request: web.Request) -> web.Response:
 
     table = (
         "<table><tr><th>#</th><th>Name</th><th>Username</th><th>Telegram ID</th>"
-        "<th>Severity</th><th>Reason</th><th>Added</th><th>Actions</th></tr>"
-        + ("".join(rows) if rows else "<tr><td colspan=8 class='muted'>No scammers yet.</td></tr>")
+        "<th>Severity</th><th>Reason</th><th>Payment</th><th>Added</th><th>Actions</th></tr>"
+        + ("".join(rows) if rows else "<tr><td colspan=9 class='muted'>No scammers yet.</td></tr>")
         + "</table>"
     )
 
@@ -603,6 +607,8 @@ async def _scammers_add_get(request: web.Request) -> web.Response:
         + "<input type=text name=username placeholder='username'>"
         + "<label>Reason</label>"
         + "<input type=text name=reason placeholder='Fraud / scam reason' required>"
+        + "<label>Payment info (Binance ID / UPI / wallet address, optional)</label>"
+        + "<input type=text name=payment_info placeholder='e.g. Binance ID 123456789'>"
         + "<label>Severity</label>"
         + "<select name=severity>"
         + "<option value=medium selected>🟡 Medium</option>"
@@ -619,10 +625,11 @@ async def _scammers_add_get(request: web.Request) -> web.Response:
 
 async def _scammers_add_post(request: web.Request) -> web.Response:
     data = await request.post()
-    raw_id    = (data.get("telegram_id") or "").strip().lstrip("@")
-    raw_uname = (data.get("username") or "").strip().lstrip("@")
-    reason    = (data.get("reason") or "").strip() or "No reason provided"
-    severity  = (data.get("severity") or "medium").lower()
+    raw_id       = (data.get("telegram_id") or "").strip().lstrip("@")
+    raw_uname    = (data.get("username") or "").strip().lstrip("@")
+    reason       = (data.get("reason") or "").strip() or "No reason provided"
+    payment_info = (data.get("payment_info") or "").strip() or None
+    severity     = (data.get("severity") or "medium").lower()
     if severity not in ("high", "medium", "low"):
         severity = "medium"
 
@@ -660,20 +667,21 @@ async def _scammers_add_post(request: web.Request) -> web.Response:
             logger.info("get_chat(@%s) failed: %s", username, e)
 
     scammer_id = await add_scammer(
-        telegram_id = telegram_id,
-        username    = username,
-        name        = full_name,
-        reason      = reason,
-        proof       = None,
-        added_by    = 0,
-        severity    = severity,
+        telegram_id  = telegram_id,
+        username     = username,
+        name         = full_name,
+        reason       = reason,
+        proof        = None,
+        added_by     = 0,
+        severity     = severity,
+        payment_info = payment_info,
     )
 
     from bot.handlers.callbacks import _kick_from_all_groups
     if telegram_id:
         await _kick_from_all_groups(bot, telegram_id)
 
-    await broadcast_scammer(bot, scammer_id, username, telegram_id, reason, severity=severity)
+    await broadcast_scammer(bot, scammer_id, username, telegram_id, reason, severity=severity, payment_info=payment_info)
 
     uname_str = f"@{username}" if username else (str(telegram_id) if telegram_id else "—")
     await audit(_WEB_ACTOR, "addid", "scammer", scammer_id, f"{uname_str} (via web)")
