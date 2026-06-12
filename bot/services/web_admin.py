@@ -11,12 +11,15 @@ Every action here mirrors the matching bot command (/approve, /reject, /edit,
 broadcasts, kicks, and audit-log entries all happen exactly the same way, just
 tagged "(via web)" and attributed to the admin who performed it.
 
-Auth: two ways to log in (HTTP Basic auth)
+Auth: a proper login page (/login) backed by a server-side session cookie.
+Two ways to get credentials that work there:
   - Owner bootstrap: WEB_ADMIN_USER / WEB_ADMIN_PASS from .env (role=owner).
   - Per-admin: a web_credentials row, either set by the admin themselves via
     /webpass <password> in PM, or set/changed by the owner directly from the
     "👥 Admins" page (per-admin username + password form). Role is "owner" or
     "admin" based on bot.services.admins (is_owner / get_admin_ids).
+Sessions are kept in memory (lost on restart — just log in again) and expire
+after _SESSION_TTL. /logout clears the cookie and session.
 
 Role differences: admins get the full edit + monitor toolset (dashboard,
 pending, scammers) but the "👥 Admins" page (admin roster + trusted
@@ -24,20 +27,21 @@ reporters) is owner-only — both hidden from nav and 403'd if hit directly.
 
 Opt-in: does nothing unless WEB_ADMIN_PORT is set in .env.
 
-Security note: Basic auth over plain HTTP sends the password in (base64, not
-encrypted) on every request. For anything public, put it behind nginx + HTTPS
-or reach it over an SSH tunnel. Use a long random WEB_ADMIN_PASS / /webpass.
+Security note: session cookies are sent in the clear over plain HTTP. For
+anything public, put it behind nginx + HTTPS or reach it over an SSH tunnel.
+Use a long random WEB_ADMIN_PASS / /webpass.
 """
 from __future__ import annotations
 
 import asyncio
-import base64
 import html
 import logging
 import os
 import secrets
+import time
 from types import SimpleNamespace
 from typing import Optional
+from urllib.parse import quote
 
 from aiohttp import web
 from telegram.error import TelegramError
@@ -84,6 +88,7 @@ _ERR_MSG = {
     "already":   "That user is already the owner.",
     "short":     "Password must be at least 6 characters.",
     "taken":     "That web username is already taken by another admin — pick another.",
+    "badlogin":  "Invalid username or password.",
 }
 
 _OK_MSG = {
@@ -136,6 +141,14 @@ tr:last-child td{border-bottom:none}
 .pager{margin-top:14px;display:flex;gap:8px}
 .pager a{color:#9aa3ad;text-decoration:none;padding:6px 12px;border:1px solid #232833;
   border-radius:6px;background:#171a21}
+.topbar{display:flex;justify-content:space-between;align-items:center;
+  margin-bottom:10px;font-size:13px;color:#9aa3ad}
+.login-wrap{display:flex;align-items:center;justify-content:center;min-height:100vh}
+.login-box{background:#171a21;border:1px solid #232833;border-radius:10px;padding:28px;width:320px}
+.login-box h1{font-size:18px;margin:0 0 16px;text-align:center}
+.login-box label{display:block;font-size:12px;color:#9aa3ad;margin:12px 0 4px}
+.login-box input{width:100%;background:#0f1115;color:#e6e8eb;border:1px solid #232833;
+  border-radius:6px;padding:8px;font-size:13px;font-family:inherit}
 """
 
 _NAV = [
@@ -148,36 +161,34 @@ _NAV = [
 
 # ── Auth ─────────────────────────────────────────────────────────────────────
 
-async def _authenticate(request: web.Request) -> Optional[dict]:
-    """Return {"id", "username", "role"} for valid credentials, else None.
+_SESSIONS: dict[str, dict] = {}
+_SESSION_COOKIE = "session"
+_SESSION_TTL    = 7 * 24 * 3600  # 7 days
+
+
+async def _check_credentials(username: str, password: str) -> Optional[dict]:
+    """Return {"id", "username", "role"} for valid username/password, else None.
 
     Two ways in: the WEB_ADMIN_USER/PASS env bootstrap (always role=owner),
-    or a per-admin login set via /webpass (role derived from is_owner /
-    get_admin_ids — a revoked admin's row is deleted by /removeadmin, but we
-    re-check membership here too as a defense-in-depth measure).
+    or a per-admin login set via /webpass or the owner's Admins page (role
+    derived from is_owner / get_admin_ids — a revoked admin's row is deleted
+    by /removeadmin, but we re-check membership here too as a defense-in-depth
+    measure).
     """
-    hdr = request.headers.get("Authorization", "")
-    if not hdr.startswith("Basic "):
-        return None
-    try:
-        raw = base64.b64decode(hdr[6:]).decode("utf-8")
-        user, _, pw = raw.partition(":")
-    except Exception:
-        return None
-    if not user or not pw:
+    if not username or not password:
         return None
 
     env_user = os.getenv("WEB_ADMIN_USER", "admin")
     env_pass = os.getenv("WEB_ADMIN_PASS", "")
-    if env_pass and secrets.compare_digest(user, env_user) and secrets.compare_digest(pw, env_pass):
+    if env_pass and secrets.compare_digest(username, env_user) and secrets.compare_digest(password, env_pass):
         return {"id": owner_id(), "username": env_user, "role": "owner"}
 
-    cred = await get_web_credentials_by_username(user)
+    cred = await get_web_credentials_by_username(username)
     if not cred:
         return None
 
     loop = asyncio.get_event_loop()
-    ok = await loop.run_in_executor(None, verify_password, pw, cred["password_hash"], cred["salt"])
+    ok = await loop.run_in_executor(None, verify_password, password, cred["password_hash"], cred["salt"])
     if not ok:
         return None
 
@@ -190,6 +201,29 @@ async def _authenticate(request: web.Request) -> Optional[dict]:
         return None
 
     return {"id": telegram_id, "username": cred["username"], "role": role}
+
+
+def _create_session(web_user: dict) -> str:
+    token = secrets.token_hex(32)
+    _SESSIONS[token] = {**web_user, "_expires": time.time() + _SESSION_TTL}
+    return token
+
+
+def _get_session(request: web.Request) -> Optional[dict]:
+    token = request.cookies.get(_SESSION_COOKIE)
+    if not token:
+        return None
+    sess = _SESSIONS.get(token)
+    if not sess or sess["_expires"] < time.time():
+        _SESSIONS.pop(token, None)
+        return None
+    return sess
+
+
+def _destroy_session(request: web.Request) -> None:
+    token = request.cookies.get(_SESSION_COOKIE)
+    if token:
+        _SESSIONS.pop(token, None)
 
 
 def _actor_ns(request: web.Request) -> SimpleNamespace:
@@ -205,15 +239,13 @@ def _require_owner(request: web.Request) -> None:
 
 @web.middleware
 async def _auth_mw(request: web.Request, handler):
-    if request.path == "/health":
+    if request.path in ("/health", "/login", "/logout"):
         return await handler(request)
-    web_user = await _authenticate(request)
+
+    web_user = _get_session(request)
     if web_user is None:
-        return web.Response(
-            status=401,
-            headers={"WWW-Authenticate": 'Basic realm="Scammer Bot Admin"'},
-            text="401 Unauthorized",
-        )
+        raise web.HTTPFound(f"/login?next={quote(request.path_qs, safe='')}")
+
     request["web_user"] = web_user
     return await handler(request)
 
@@ -237,11 +269,19 @@ def _when(dt) -> str:
         return _esc(dt)
 
 
-def _layout(title: str, active: str, body: str, *, role: str = "owner", refresh: bool = False) -> str:
+def _layout(title: str, active: str, body: str, *, web_user: dict, refresh: bool = False) -> str:
+    role = web_user["role"]
     nav = _NAV if role == "owner" else [item for item in _NAV if item[0] != "/admins"]
     nav_html = "".join(
         f'<a href="{href}" class="navlink{" active" if href == active else ""}">{label}</a>'
         for href, label in nav
+    )
+    role_label = "👑 Owner" if role == "owner" else "🛠 Admin"
+    topbar = (
+        "<div class='topbar'>"
+        f"<span>👤 {_esc(web_user['username'])} · {role_label}</span>"
+        "<a href='/logout' class='navlink'>🚪 Logout</a>"
+        "</div>"
     )
     refresh_tag = "<meta http-equiv='refresh' content='30'>" if refresh else ""
     return (
@@ -250,9 +290,21 @@ def _layout(title: str, active: str, body: str, *, role: str = "owner", refresh:
         f"{refresh_tag}"
         f"<title>{_esc(title)} — Scammer Bot Admin</title>"
         f"<style>{_CSS}</style></head><body><div class='wrap'>"
+        f"{topbar}"
         f"<div class='nav'>{nav_html}</div>"
         f"{body}"
         "</div></body></html>"
+    )
+
+
+def _login_layout(body: str) -> str:
+    return (
+        "<!doctype html><html><head><meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width, initial-scale=1'>"
+        "<title>Log in — Scammer Bot Admin</title>"
+        f"<style>{_CSS}</style></head><body>"
+        f"<div class='login-wrap'>{body}</div>"
+        "</body></html>"
     )
 
 
@@ -335,22 +387,77 @@ async def _index(request: web.Request) -> web.Response:
         f"<div class='cards'>{cards}</div>"
         f"{admins_html}{actions_html}"
     )
-    return web.Response(text=_layout("Dashboard", "/", body, role=role, refresh=True), content_type="text/html")
+    return web.Response(text=_layout("Dashboard", "/", body, web_user=request["web_user"], refresh=True), content_type="text/html")
 
 
 async def _health(request: web.Request) -> web.Response:
     return web.Response(text="ok")
 
 
+# ── Login / logout ───────────────────────────────────────────────────────────
+
+def _safe_next(request: web.Request) -> str:
+    next_url = request.query.get("next", "/")
+    if not next_url.startswith("/") or next_url.startswith("//"):
+        return "/"
+    return next_url
+
+
+async def _login_get(request: web.Request) -> web.Response:
+    if _get_session(request):
+        raise web.HTTPFound("/")
+
+    next_url = _safe_next(request)
+    err      = request.query.get("err")
+    err_html = f"<div class='flash err'>{_esc(_ERR_MSG.get(err, err))}</div>" if err else ""
+
+    body = (
+        "<div class='login-box'>"
+        "<h1>🔒 Scammer Bot Admin</h1>"
+        + err_html +
+        f"<form method=post action='/login?next={quote(next_url, safe='')}'>"
+        "<label>Username</label>"
+        "<input type=text name=username autofocus required>"
+        "<label>Password</label>"
+        "<input type=password name=password required>"
+        "<button class='btn btn-blue' style='width:100%;margin-top:16px'>Log in</button>"
+        "</form>"
+        "</div>"
+    )
+    return web.Response(text=_login_layout(body), content_type="text/html")
+
+
+async def _login_post(request: web.Request) -> web.Response:
+    data     = await request.post()
+    username = (data.get("username") or "").strip()
+    password = data.get("password") or ""
+    next_url = _safe_next(request)
+
+    web_user = await _check_credentials(username, password)
+    if web_user is None:
+        raise web.HTTPFound(f"/login?err=badlogin&next={quote(next_url, safe='')}")
+
+    token = _create_session(web_user)
+    resp  = web.HTTPFound(next_url)
+    resp.set_cookie(_SESSION_COOKIE, token, max_age=_SESSION_TTL, httponly=True, samesite="Lax")
+    raise resp
+
+
+async def _logout(request: web.Request) -> web.Response:
+    _destroy_session(request)
+    resp = web.HTTPFound("/login")
+    resp.del_cookie(_SESSION_COOKIE)
+    raise resp
+
+
 # ── Pending reports ──────────────────────────────────────────────────────────
 
 async def _pending_page(request: web.Request) -> web.Response:
-    role    = request["web_user"]["role"]
     reports = await list_pending_reports()
 
     if not reports:
         body = _flash(request) + "<h1>📨 Pending Reports</h1><p class='muted'>No pending reports. 🎉</p>"
-        return web.Response(text=_layout("Pending Reports", "/pending", body, role=role), content_type="text/html")
+        return web.Response(text=_layout("Pending Reports", "/pending", body, web_user=request["web_user"]), content_type="text/html")
 
     rows = []
     for r in reports:
@@ -388,7 +495,7 @@ async def _pending_page(request: web.Request) -> web.Response:
         "<th>Reporter</th><th>When</th><th>Actions</th></tr>" + "".join(rows) + "</table>"
     )
     body = _flash(request) + f"<h1>📨 Pending Reports ({len(reports)})</h1>" + table
-    return web.Response(text=_layout("Pending Reports", "/pending", body, role=role), content_type="text/html")
+    return web.Response(text=_layout("Pending Reports", "/pending", body, web_user=request["web_user"]), content_type="text/html")
 
 
 async def _do_approve(bot, report: dict, severity: str, actor: SimpleNamespace) -> int | None:
@@ -601,7 +708,7 @@ async def _scammers_page(request: web.Request) -> web.Response:
         + "<p><a class='btn btn-blue' href='/scammers/add'>➕ Add Scammer</a></p>"
         + table + pager
     )
-    return web.Response(text=_layout("Scammers", "/scammers", body, role=request["web_user"]["role"]), content_type="text/html")
+    return web.Response(text=_layout("Scammers", "/scammers", body, web_user=request["web_user"]), content_type="text/html")
 
 
 async def _scammers_edit_get(request: web.Request) -> web.Response:
@@ -646,7 +753,7 @@ async def _scammers_edit_get(request: web.Request) -> web.Response:
         + " <a class='btn btn-gray' href='/scammers'>Cancel</a>"
         + "</form>"
     )
-    return web.Response(text=_layout(f"Edit Scammer #{entry['id']}", "/scammers", body, role=request["web_user"]["role"]), content_type="text/html")
+    return web.Response(text=_layout(f"Edit Scammer #{entry['id']}", "/scammers", body, web_user=request["web_user"]), content_type="text/html")
 
 
 async def _scammers_edit_post(request: web.Request) -> web.Response:
@@ -744,7 +851,7 @@ async def _scammers_add_get(request: web.Request) -> web.Response:
         + "<p class='muted'>Bot will auto-fetch username/name from Telegram, kick the user "
         + "from all groups, and broadcast the alert to every group — same as /addid.</p>"
     )
-    return web.Response(text=_layout("Add Scammer", "/scammers", body, role=request["web_user"]["role"]), content_type="text/html")
+    return web.Response(text=_layout("Add Scammer", "/scammers", body, web_user=request["web_user"]), content_type="text/html")
 
 
 async def _scammers_add_post(request: web.Request) -> web.Response:
@@ -909,7 +1016,7 @@ async def _admins_page(request: web.Request) -> web.Response:
         + "<h2>Admins</h2>" + admins_table + add_admin_form
         + "<h2>Trusted reporters (auto-approve)</h2>" + trusted_table + add_trusted_form
     )
-    return web.Response(text=_layout("Admins", "/admins", body, role="owner"), content_type="text/html")
+    return web.Response(text=_layout("Admins", "/admins", body, web_user=request["web_user"]), content_type="text/html")
 
 
 async def _admins_add(request: web.Request) -> web.Response:
@@ -1040,6 +1147,9 @@ async def run_web_admin(bot) -> None:
 
     app.router.add_get("/", _index)
     app.router.add_get("/health", _health)
+    app.router.add_get("/login", _login_get)
+    app.router.add_post("/login", _login_post)
+    app.router.add_get("/logout", _logout)
 
     app.router.add_get("/pending", _pending_page)
     app.router.add_post("/pending/approve", _pending_approve)
