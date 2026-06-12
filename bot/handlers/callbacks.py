@@ -14,6 +14,7 @@ from bot.handlers.appeal import appeal_approve, appeal_reject
 from bot.handlers.force_join import recheck_join_callback
 from bot.services.emoji_fx import em
 from bot.services.broadcaster import broadcast_scammer
+from bot.services.audit import audit
 
 logger = logging.getLogger(__name__)
 
@@ -205,6 +206,10 @@ async def _approve(
         ),
     )
 
+    _tgt = f"@{report['target_username']}" if report.get("target_username") else (str(report.get("target_id")) if report.get("target_id") else "—")
+    await audit(query.from_user, "approve", "scammer", scammer_id,
+                f"sev={severity} target={_tgt} report#{report_id}")
+
 
 async def _reject(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query     = update.callback_query
@@ -245,6 +250,9 @@ async def _reject(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         actor_id=query.from_user.id,
         headline=f"❌ <b>Submission #{report_id} rejected</b>\n🎯 {_target_str(report)}",
     )
+
+    _tgt = f"@{report['target_username']}" if report.get("target_username") else (str(report.get("target_id")) if report.get("target_id") else "—")
+    await audit(query.from_user, "reject", "report", report_id, f"target={_tgt}")
 
 
 async def _quickadd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -290,6 +298,8 @@ async def _quickadd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         context.bot, scammer_id, uname, tg_id,
         "Added via forward", severity="medium",
     )
+
+    await audit(query.from_user, "quickadd", "scammer", scammer_id, f"target={uname_str}")
 
     # Kick from all groups immediately
     kicked   = await _kick_from_all_groups(context.bot, tg_id)

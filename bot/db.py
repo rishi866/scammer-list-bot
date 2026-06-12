@@ -146,6 +146,18 @@ async def init_db() -> None:
                 first_seen  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 last_seen   TIMESTAMPTZ NOT NULL DEFAULT NOW()
             );
+
+            CREATE TABLE IF NOT EXISTS admin_actions (
+                id             BIGSERIAL PRIMARY KEY,
+                actor_id       BIGINT,
+                actor_username TEXT,
+                action         TEXT NOT NULL,
+                target_type    TEXT,
+                target_id      TEXT,
+                detail         TEXT,
+                created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+            CREATE INDEX IF NOT EXISTS idx_admin_actions_time ON admin_actions (created_at DESC);
         """)
         # Idempotent migrations for columns added after initial deploy
         for tbl, col, definition in [
@@ -709,4 +721,51 @@ async def get_bot_user_by_username(username: str) -> Optional[dict]:
     return _row(await pool.fetchrow(
         "SELECT * FROM bot_users WHERE LOWER(username) = LOWER($1)",
         username.lstrip("@"),
+    ))
+
+
+# ── Admin action audit log ────────────────────────────────────────────────────
+
+async def log_admin_action(
+    actor_id: Optional[int],
+    actor_username: Optional[str],
+    action: str,
+    target_type: Optional[str] = None,
+    target_id=None,
+    detail: Optional[str] = None,
+) -> None:
+    """Record one admin action. Never raises — auditing must not break the
+    action it's logging."""
+    try:
+        pool = await _get_pool()
+        await pool.execute(
+            "INSERT INTO admin_actions "
+            "(actor_id, actor_username, action, target_type, target_id, detail) "
+            "VALUES ($1, $2, $3, $4, $5, $6)",
+            actor_id, actor_username, action, target_type,
+            (str(target_id) if target_id is not None else None), detail,
+        )
+    except Exception as e:
+        logger.warning("log_admin_action failed: %s", e)
+
+
+async def recent_admin_actions(limit: int = 200) -> list[dict]:
+    """Most recent admin actions, newest first."""
+    pool = await _get_pool()
+    return _rows(await pool.fetch(
+        "SELECT * FROM admin_actions ORDER BY created_at DESC LIMIT $1", limit
+    ))
+
+
+async def admin_action_counts() -> list[dict]:
+    """Per-admin action totals (for the web panel's at-a-glance view)."""
+    pool = await _get_pool()
+    return _rows(await pool.fetch(
+        "SELECT actor_id, "
+        "       MAX(actor_username) AS actor_username, "
+        "       COUNT(*)            AS total, "
+        "       MAX(created_at)     AS last_action "
+        "FROM admin_actions "
+        "GROUP BY actor_id "
+        "ORDER BY total DESC"
     ))

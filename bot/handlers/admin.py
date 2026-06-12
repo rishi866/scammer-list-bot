@@ -38,6 +38,7 @@ from bot.services.admins import (
     resolve_protected_role,
     protected_block_message,
 )
+from bot.services.audit import audit
 from bot.services.emoji_fx import em
 
 logger = logging.getLogger(__name__)
@@ -229,6 +230,7 @@ async def remove_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             em(f"✅ <b>#{seq} ({uname}) removed</b> from scammer list."),
             parse_mode="HTML",
         )
+        await audit(update.effective_user, "remove", "scammer", entry["id"], f"{uname}")
     else:
         await update.message.reply_text(em(f"❌ Could not remove #{seq}."), parse_mode="HTML")
 
@@ -301,6 +303,8 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         ),
         parse_mode="HTML",
     )
+    await audit(update.effective_user, "edit", "scammer", entry["id"],
+                f"{field}: {old_value if old_value not in (None, '') else '—'} → {value}")
 
 
 # ── /refreshusername ─────────────────────────────────────────────────────────
@@ -524,6 +528,7 @@ async def approve_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         actor_id=update.effective_user.id,
         headline=f"✅ <b>Submission #{rid} approved</b>\n🎯 {_target_str(report)} → Scammer #{scammer_id}",
     )
+    await audit(update.effective_user, "approve", "scammer", scammer_id, f"report#{rid} (via /approve)")
 
 
 @admin_only
@@ -548,6 +553,7 @@ async def reject_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         actor_id=update.effective_user.id,
         headline=f"❌ <b>Submission #{rid} rejected</b>\n🎯 {_target_str(report)}",
     )
+    await audit(update.effective_user, "reject", "report", rid, "via /reject")
 
 
 # ── /stats ────────────────────────────────────────────────────────────────────

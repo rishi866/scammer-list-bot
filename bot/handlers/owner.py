@@ -25,6 +25,7 @@ from bot.services.admins import (
     is_owner,
     owner_only,
 )
+from bot.services.audit import audit
 from bot.services.emoji_fx import em
 
 logger = logging.getLogger(__name__)
@@ -65,6 +66,7 @@ async def addadmin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         ),
         parse_mode="HTML",
     )
+    await audit(update.effective_user, "addadmin", "admin", target_id)
 
     try:
         await context.bot.send_message(
@@ -91,6 +93,7 @@ async def removeadmin_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     if result == "removed":
         await update.message.reply_text(em(f"✅ <code>{target_id}</code> is no longer an admin."), parse_mode="HTML")
+        await audit(update.effective_user, "removeadmin", "admin", target_id)
     elif result == "owner":
         await update.message.reply_text(em("⛔ You can't remove the owner."), parse_mode="HTML")
     elif result == "env":

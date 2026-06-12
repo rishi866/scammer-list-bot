@@ -16,6 +16,7 @@ from telegram.error import TelegramError
 
 from bot.db import add_trusted_reporter, remove_trusted_reporter, list_trusted_reporters
 from bot.services.admins import get_admin_ids as _admin_ids
+from bot.services.audit import audit
 from bot.services.emoji_fx import em
 
 logger = logging.getLogger(__name__)
@@ -67,6 +68,7 @@ async def addtrusted_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
            "Their /add submissions will be auto-approved."),
         parse_mode="HTML",
     )
+    await audit(update.effective_user, "addtrusted", "user", user_id, uname_display)
 
 
 @admin_only
@@ -92,6 +94,7 @@ async def removetrusted_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await remove_trusted_reporter(match["user_id"])
     uname = f"@{match['username']}" if match.get("username") else str(match["user_id"])
     await update.message.reply_text(em(f"✅ Removed trusted status from {uname}."), parse_mode="HTML")
+    await audit(update.effective_user, "removetrusted", "user", match["user_id"], uname)
 
 
 @admin_only

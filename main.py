@@ -61,6 +61,7 @@ from bot.services.broadcaster        import on_bot_member_update
 from bot.services.weekly_digest      import weekly_digest_loop
 from bot.services.user_tracker       import track_message_user, track_member_join
 from bot.services.user_sync          import user_sync_loop
+from bot.services.web_admin          import run_web_admin
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 
@@ -199,13 +200,14 @@ async def run() -> None:
     refresh_task = asyncio.create_task(username_refresh_loop(app.bot), name="username-refresh")
     digest_task  = asyncio.create_task(weekly_digest_loop(app.bot),   name="weekly-digest")
     sync_task    = asyncio.create_task(user_sync_loop(),              name="user-sync")
+    web_task     = asyncio.create_task(run_web_admin(),              name="web-admin")
 
     try:
         await asyncio.Event().wait()
     except (KeyboardInterrupt, SystemExit):
         pass
     finally:
-        for task in (refresh_task, digest_task, sync_task):
+        for task in (refresh_task, digest_task, sync_task, web_task):
             task.cancel()
             try:
                 await task

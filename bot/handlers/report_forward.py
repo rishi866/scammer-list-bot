@@ -22,6 +22,7 @@ from bot.services.admins import (
     resolve_protected_role,
     protected_block_message,
 )
+from bot.services.audit import audit
 from bot.services.emoji_fx import em
 
 logger = logging.getLogger(__name__)
@@ -174,6 +175,8 @@ async def on_addid_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             ),
             parse_mode="HTML",
         )
+        await audit(update.effective_user, "addid", "scammer", scammer_id,
+                    f"{uname_str} id={telegram_id}")
         return
 
     # ── NON-ADMIN ─────────────────────────────────────────────────────────────
