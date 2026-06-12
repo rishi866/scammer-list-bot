@@ -200,7 +200,7 @@ async def run() -> None:
     refresh_task = asyncio.create_task(username_refresh_loop(app.bot), name="username-refresh")
     digest_task  = asyncio.create_task(weekly_digest_loop(app.bot),   name="weekly-digest")
     sync_task    = asyncio.create_task(user_sync_loop(),              name="user-sync")
-    web_task     = asyncio.create_task(run_web_admin(),              name="web-admin")
+    web_task     = asyncio.create_task(run_web_admin(app.bot),       name="web-admin")
 
     try:
         await asyncio.Event().wait()
