@@ -13,7 +13,7 @@ from telegram.ext import (
     filters,
 )
 
-from bot.db import add_report
+from bot.db import add_report, scammer_exists
 from bot.services.admins import get_admin_ids, resolve_protected_role, protected_block_message
 from bot.services.emoji_fx import em
 
@@ -49,6 +49,26 @@ async def report_target(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     role = await resolve_protected_role(target_id, target_username, bot=context.bot)
     if role:
         await update.message.reply_text(em(protected_block_message(role)), parse_mode="HTML")
+        context.user_data.clear()
+        return ConversationHandler.END
+
+    # Already a confirmed scammer — no need to file another report
+    dup = await scammer_exists(target_id, target_username)
+    if dup:
+        sev      = (dup.get("severity") or "medium").lower()
+        sev_icon = {"high": "🔴", "medium": "🟡", "low": "🟢"}.get(sev, "🟡")
+        uname    = f"@{dup['username']}" if dup.get("username") else "—"
+        await update.message.reply_text(
+            em(
+                f"ℹ️ <b>Already listed as Scammer #{dup['id']}</b>\n\n"
+                f"📝 Username : {uname}\n"
+                f"🔑 Tele ID  : <code>{dup.get('telegram_id') or '—'}</code>\n"
+                f"{sev_icon} Severity  : {sev.capitalize()}\n"
+                f"⚠️ Reason   : {dup['reason']}\n\n"
+                f"No need to report again — use /check to verify anyone."
+            ),
+            parse_mode="HTML",
+        )
         context.user_data.clear()
         return ConversationHandler.END
 

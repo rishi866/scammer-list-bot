@@ -465,6 +465,34 @@ async def scammer_exists(telegram_id: Optional[int], username: Optional[str]) ->
     return None
 
 
+async def cleanup_duplicate_pending_reports() -> list[dict]:
+    """Auto-reject pending reports whose target is already a listed scammer.
+
+    Catches reports submitted before a duplicate check was added, and the
+    race where a second pending report for the same target outlives the
+    first one's approval. Returns the rows that were rejected.
+    """
+    pool = await _get_pool()
+    rows = await pool.fetch(
+        """
+        UPDATE reports r
+        SET status = 'rejected'
+        WHERE r.status = 'pending'
+          AND (
+            (r.target_id IS NOT NULL AND EXISTS (
+                SELECT 1 FROM scammers s WHERE s.telegram_id = r.target_id
+            ))
+            OR
+            (r.target_username IS NOT NULL AND EXISTS (
+                SELECT 1 FROM scammers s WHERE LOWER(s.username) = LOWER(r.target_username)
+            ))
+          )
+        RETURNING r.id, r.target_id, r.target_username
+        """
+    )
+    return _rows(rows)
+
+
 # ── Bot Groups ────────────────────────────────────────────────────────────────
 
 async def upsert_bot_group(group_id: int, title: Optional[str]) -> None:

@@ -318,9 +318,29 @@ async def _pending_page(request: web.Request) -> web.Response:
     return web.Response(text=_layout("Pending Reports", "/pending", body), content_type="text/html")
 
 
-async def _do_approve(bot, report: dict, severity: str) -> int:
-    """Approve a report — same effects as the ✅ button / /approve command."""
+async def _do_approve(bot, report: dict, severity: str) -> int | None:
+    """Approve a report — same effects as the ✅ button / /approve command.
+
+    Returns the new scammer's ID, or None if the target was already listed
+    (the report is auto-rejected as a duplicate instead, no new entry made).
+    """
     from bot.handlers.callbacks import _kick_from_all_groups, _broadcast_resolution, _target_str
+
+    dup = await scammer_exists(report.get("target_id"), report.get("target_username"))
+    if dup:
+        await update_report_status(report["id"], "rejected")
+        await _broadcast_resolution(
+            SimpleNamespace(bot=bot),
+            actor="🌐 Web Panel",
+            actor_id=0,
+            headline=(
+                f"♻️ <b>Submission #{report['id']} auto-rejected</b> — duplicate of Scammer #{dup['id']}\n"
+                f"🎯 {_target_str(report)}"
+            ),
+        )
+        _tgt = f"@{report['target_username']}" if report.get("target_username") else (str(report.get("target_id")) if report.get("target_id") else "—")
+        await audit(_WEB_ACTOR, "auto_reject_dup", "report", report["id"], f"dup_of=#{dup['id']} target={_tgt} (via web)")
+        return None
 
     scammer_id = await add_scammer(
         telegram_id   = report.get("target_id"),
@@ -403,7 +423,9 @@ async def _pending_approve(request: web.Request) -> web.Response:
     if not report or report["status"] != "pending":
         raise web.HTTPFound("/pending")
 
-    await _do_approve(request.app["bot"], report, severity)
+    scammer_id = await _do_approve(request.app["bot"], report, severity)
+    if scammer_id is None:
+        raise web.HTTPFound("/pending?err=dup")
     raise web.HTTPFound("/pending")
 
 

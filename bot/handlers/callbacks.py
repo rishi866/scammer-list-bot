@@ -88,6 +88,36 @@ async def _approve(
         await query.answer(f"Already {report['status']} {status_icon}", show_alert=True)
         return
 
+    # Target already listed (e.g. a second report for the same person) —
+    # auto-reject this one instead of creating a duplicate scammer entry.
+    dup = await scammer_exists(report.get("target_id"), report.get("target_username"))
+    if dup:
+        await update_report_status(report_id, "rejected")
+
+        rejecter = f"@{query.from_user.username}" if query.from_user.username else str(query.from_user.id)
+        suffix   = em(f"\n\nℹ️ <b>Auto-rejected — duplicate</b> of Scammer #{dup['id']} (already listed)")
+        try:
+            if query.message.photo:
+                await query.edit_message_caption((query.message.caption or "") + suffix, parse_mode="HTML")
+            else:
+                await query.edit_message_text((query.message.text or "") + suffix, parse_mode="HTML")
+        except Exception as exc:
+            logger.warning("Could not edit admin message: %s", exc)
+
+        await _broadcast_resolution(
+            context,
+            actor=rejecter,
+            actor_id=query.from_user.id,
+            headline=(
+                f"♻️ <b>Submission #{report_id} auto-rejected</b> — duplicate of Scammer #{dup['id']}\n"
+                f"🎯 {_target_str(report)}"
+            ),
+        )
+
+        _tgt = _target_str(report)
+        await audit(query.from_user, "auto_reject_dup", "report", report_id, f"dup_of=#{dup['id']} target={_tgt}")
+        return
+
     scammer_id = await add_scammer(
         telegram_id  = report.get("target_id"),
         username     = report.get("target_username"),

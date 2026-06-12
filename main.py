@@ -21,7 +21,7 @@ from telegram.ext import (
 )
 from telegram.request import HTTPXRequest
 
-from bot.db import init_db
+from bot.db import init_db, cleanup_duplicate_pending_reports
 from bot.services import emoji_fx
 from bot.handlers.start        import start_command, help_command
 from bot.handlers.check        import check_command
@@ -73,6 +73,13 @@ async def run() -> None:
 
     await init_db()
     await refresh_admin_cache()
+
+    dup_rejected = await cleanup_duplicate_pending_reports()
+    if dup_rejected:
+        logger.info(
+            "Auto-rejected %d pending report(s) already in scammer list: %s",
+            len(dup_rejected), [r["id"] for r in dup_rejected],
+        )
 
     try:
         await emoji_fx.load()
