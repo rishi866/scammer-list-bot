@@ -393,7 +393,12 @@ async def _do_approve(bot, report: dict, severity: str) -> int | None:
             logger.warning("Could not resolve ID for @%s at kick time: %s", report.get("target_username"), e)
 
     if target_tg_id:
-        await _kick_from_all_groups(bot, target_tg_id)
+        await _kick_from_all_groups(
+            bot, target_tg_id,
+            username=report.get("target_username"),
+            reason=report["reason"],
+            scammer_id=scammer_id,
+        )
 
     await _broadcast_resolution(
         SimpleNamespace(bot=bot),
@@ -679,7 +684,12 @@ async def _scammers_add_post(request: web.Request) -> web.Response:
 
     from bot.handlers.callbacks import _kick_from_all_groups
     if telegram_id:
-        await _kick_from_all_groups(bot, telegram_id)
+        await _kick_from_all_groups(
+            bot, telegram_id,
+            username=username,
+            reason=reason,
+            scammer_id=scammer_id,
+        )
 
     await broadcast_scammer(bot, scammer_id, username, telegram_id, reason, severity=severity, payment_info=payment_info)
 

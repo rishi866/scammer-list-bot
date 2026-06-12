@@ -158,7 +158,12 @@ async def on_addid_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             severity    = "medium",
         )
 
-        kicked   = await _kick_from_all_groups(context.bot, telegram_id)
+        kicked   = await _kick_from_all_groups(
+            context.bot, telegram_id,
+            username=username,
+            reason=reason,
+            scammer_id=scammer_id,
+        )
         auto_ban = os.getenv("AUTO_BAN", "false").lower() in ("1", "true", "yes")
         action   = "🔨 Banned" if auto_ban else "🦵 Kicked"
         kick_line = f"\n{action} from <b>{kicked}</b> group(s)." if kicked else "\n⚠️ Not found in any active group."

@@ -21,14 +21,37 @@ logger = logging.getLogger(__name__)
 SEV_ICON = {"high": "🔴", "medium": "🟡", "low": "🟢"}
 
 
-async def _kick_from_all_groups(bot, telegram_id: int, skip_group_id: int | None = None) -> int:
-    """Kick (or ban if AUTO_BAN=true) scammer from every active group. Returns count."""
+async def _kick_from_all_groups(
+    bot,
+    telegram_id: int,
+    skip_group_id: int | None = None,
+    *,
+    username: str | None = None,
+    reason: str | None = None,
+    scammer_id: int | None = None,
+) -> int:
+    """Kick (or ban if AUTO_BAN=true) scammer from every active group.
+
+    Announces the action in each group (username, Telegram ID, reason) so
+    members know who was removed and why. Returns count kicked.
+    """
     if not telegram_id:
         return 0
 
     groups   = await list_active_bot_groups()
     auto_ban = os.getenv("AUTO_BAN", "false").lower() in ("1", "true", "yes")
+    action   = "🔨 Banned" if auto_ban else "🦵 Kicked"
     kicked   = 0
+
+    uname_disp   = f"@{username}" if username else "—"
+    id_disp      = f"<code>{telegram_id}</code>"
+    header       = f"{action} <b>Scammer</b>" + (f" — #{scammer_id}" if scammer_id else "")
+    announcement = em(
+        f"{header}\n\n"
+        f"📝 Username : {uname_disp}\n"
+        f"🔑 Tele ID  : {id_disp}\n"
+        f"⚠️ Reason   : {reason or '—'}"
+    )
 
     for g in groups:
         gid = g["group_id"]
@@ -38,6 +61,11 @@ async def _kick_from_all_groups(bot, telegram_id: int, skip_group_id: int | None
                 # Kick only (can rejoin) — ban then immediately unban
                 await bot.unban_chat_member(gid, telegram_id, only_if_banned=True)
             kicked += 1
+            if gid != skip_group_id:
+                try:
+                    await bot.send_message(gid, announcement, parse_mode="HTML")
+                except Exception as e:
+                    logger.debug("Could not send kick announcement to group %s: %s", gid, e)
         except Exception as e:
             logger.debug("Could not kick %s from group %s: %s", telegram_id, gid, e)
 
@@ -181,18 +209,12 @@ async def _approve(
             logger.warning("Could not resolve ID for @%s at kick time: %s", report.get("target_username"), e)
 
     if target_tg_id:
-        kicked = await _kick_from_all_groups(context.bot, target_tg_id)
-        auto_ban = os.getenv("AUTO_BAN", "false").lower() in ("1", "true", "yes")
-        action   = "🔨 Banned" if auto_ban else "🦵 Kicked"
-        if kicked and group_chat_id:
-            try:
-                await context.bot.send_message(
-                    group_chat_id,
-                    em(f"{action} <b>@{report.get('target_username') or target_tg_id}</b> from {kicked} group(s)."),
-                    parse_mode="HTML",
-                )
-            except Exception:
-                pass
+        await _kick_from_all_groups(
+            context.bot, target_tg_id,
+            username=report.get("target_username"),
+            reason=report["reason"],
+            scammer_id=scammer_id,
+        )
     else:
         # Still no ID — warn in the group
         if group_chat_id and report.get("target_username"):
@@ -333,15 +355,13 @@ async def _quickadd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     await audit(query.from_user, "quickadd", "scammer", scammer_id, f"target={uname_str}")
 
-    # Kick from all groups immediately
-    kicked   = await _kick_from_all_groups(context.bot, tg_id)
-    auto_ban = os.getenv("AUTO_BAN", "false").lower() in ("1", "true", "yes")
-    action   = "🔨 Banned" if auto_ban else "🦵 Kicked"
-    if kicked:
-        await query.message.reply_text(
-            em(f"{action} <b>{uname_str or tg_id}</b> from {kicked} group(s)."),
-            parse_mode="HTML",
-        )
+    # Kick from all groups immediately (announces in each group)
+    await _kick_from_all_groups(
+        context.bot, tg_id,
+        username=uname,
+        reason="Added via forward",
+        scammer_id=scammer_id,
+    )
 
 
 async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
