@@ -47,6 +47,30 @@ async def _kick_from_all_groups(bot, telegram_id: int, skip_group_id: int | None
     return kicked
 
 
+def _target_str(report: dict) -> str:
+    if report.get("target_username"):
+        return f"@{report['target_username']}"
+    if report.get("target_id"):
+        return f"ID <code>{report['target_id']}</code>"
+    return "—"
+
+
+async def _broadcast_resolution(
+    context: ContextTypes.DEFAULT_TYPE, *, actor: str, actor_id: int, headline: str
+) -> None:
+    """Tell every OTHER admin how a submission was resolved and by whom — so the
+    pending copy sitting in their DM doesn't just stay there unanswered."""
+    from bot.services.admins import get_admin_ids
+    msg = em(f"{headline}\n👮 By: {actor}")
+    for aid in get_admin_ids():
+        if aid == actor_id:
+            continue  # the actor already sees their own edited message
+        try:
+            await context.bot.send_message(aid, msg, parse_mode="HTML")
+        except Exception as exc:
+            logger.debug("Could not notify admin %s of resolution: %s", aid, exc)
+
+
 async def _approve(
     update: Update, context: ContextTypes.DEFAULT_TYPE, severity: str = "medium"
 ) -> None:
@@ -170,6 +194,17 @@ async def _approve(
     except Exception as exc:
         logger.warning("Could not edit admin message: %s", exc)
 
+    # Let the OTHER admins know it's handled + who did it
+    await _broadcast_resolution(
+        context,
+        actor=approver,
+        actor_id=query.from_user.id,
+        headline=(
+            f"✅ <b>Submission #{report_id} approved</b> — {sev_icon} {severity.capitalize()}\n"
+            f"🎯 {_target_str(report)} → Scammer #{scammer_id}"
+        ),
+    )
+
 
 async def _reject(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query     = update.callback_query
@@ -202,6 +237,14 @@ async def _reject(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             )
     except Exception as exc:
         logger.warning("Could not edit admin message: %s", exc)
+
+    # Let the OTHER admins know it's handled + who did it
+    await _broadcast_resolution(
+        context,
+        actor=rejecter,
+        actor_id=query.from_user.id,
+        headline=f"❌ <b>Submission #{report_id} rejected</b>\n🎯 {_target_str(report)}",
+    )
 
 
 async def _quickadd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

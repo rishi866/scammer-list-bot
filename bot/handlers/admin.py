@@ -516,6 +516,15 @@ async def approve_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         parse_mode="HTML",
     )
 
+    from bot.handlers.callbacks import _broadcast_resolution, _target_str
+    approver = f"@{update.effective_user.username}" if update.effective_user.username else str(update.effective_user.id)
+    await _broadcast_resolution(
+        context,
+        actor=approver,
+        actor_id=update.effective_user.id,
+        headline=f"✅ <b>Submission #{rid} approved</b>\n🎯 {_target_str(report)} → Scammer #{scammer_id}",
+    )
+
 
 @admin_only
 async def reject_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -530,6 +539,15 @@ async def reject_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
     await update_report_status(rid, "rejected")
     await update.message.reply_text(em(f"❌ Report #{rid} rejected."), parse_mode="HTML")
+
+    from bot.handlers.callbacks import _broadcast_resolution, _target_str
+    rejecter = f"@{update.effective_user.username}" if update.effective_user.username else str(update.effective_user.id)
+    await _broadcast_resolution(
+        context,
+        actor=rejecter,
+        actor_id=update.effective_user.id,
+        headline=f"❌ <b>Submission #{rid} rejected</b>\n🎯 {_target_str(report)}",
+    )
 
 
 # ── /stats ────────────────────────────────────────────────────────────────────
