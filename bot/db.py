@@ -284,6 +284,25 @@ async def update_scammer_field(scammer_id: int, field: str, value) -> bool:
     return result.endswith("1")
 
 
+async def update_scammer_fields(scammer_id: int, fields: dict) -> bool:
+    """Update multiple columns of a scammer entry at once.
+
+    `fields` keys must be in EDITABLE_FIELDS (validated by caller) — this
+    keeps the interpolated column names restricted to a fixed whitelist.
+    """
+    columns = {EDITABLE_FIELDS[f]: v for f, v in fields.items() if f in EDITABLE_FIELDS}
+    if not columns:
+        return False
+    pool = await _get_pool()
+    set_clause = ", ".join(f"{col} = ${i + 1}" for i, col in enumerate(columns))
+    values = list(columns.values())
+    result = await pool.execute(
+        f"UPDATE scammers SET {set_clause} WHERE id = ${len(values) + 1}",
+        *values, scammer_id,
+    )
+    return result.endswith("1")
+
+
 # ── Reports ───────────────────────────────────────────────────────────────────
 
 async def add_report(

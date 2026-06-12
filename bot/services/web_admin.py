@@ -35,8 +35,8 @@ from bot.db import (
     recent_admin_actions, admin_action_counts, list_trusted_reporters,
     list_pending_reports, get_report, update_report_status, count_reports,
     add_scammer, scammer_exists, update_scammer_telegram_id,
-    list_scammers, count_scammers, get_scammer_by_id, update_scammer_field,
-    remove_scammer, EDITABLE_FIELDS,
+    list_scammers, count_scammers, get_scammer_by_id,
+    update_scammer_fields, remove_scammer, EDITABLE_FIELDS,
     add_trusted_reporter, remove_trusted_reporter,
 )
 from bot.services.admins import (
@@ -105,16 +105,13 @@ tr:last-child td{border-bottom:none}
 .btn-blue{background:#2563eb}.btn-gray{background:#475569}.btn-purple{background:#7c3aed}
 .inline{display:inline-block;margin:0}
 .actions{white-space:nowrap}
-.editrow select,.editrow input[type=text]{background:#0f1115;color:#e6e8eb;
-  border:1px solid #232833;border-radius:6px;padding:4px 6px;font-size:12px;margin-right:4px}
-.editrow input[type=text]{width:110px}
 .flash{padding:10px 14px;border-radius:8px;margin-bottom:14px;font-size:13px}
 .flash.err{background:#3f1d1d;border:1px solid #7f1d1d;color:#fca5a5}
 .formcard{background:#171a21;border:1px solid #232833;border-radius:10px;
   padding:16px;margin-bottom:20px;max-width:480px}
 .formcard label{display:block;font-size:12px;color:#9aa3ad;margin:8px 0 4px}
-.formcard input,.formcard select{width:100%;background:#0f1115;color:#e6e8eb;
-  border:1px solid #232833;border-radius:6px;padding:8px;font-size:13px}
+.formcard input,.formcard select,.formcard textarea{width:100%;background:#0f1115;color:#e6e8eb;
+  border:1px solid #232833;border-radius:6px;padding:8px;font-size:13px;font-family:inherit;resize:vertical}
 .formcard .btn{margin-top:12px}
 .pager{margin-top:14px;display:flex;gap:8px}
 .pager a{color:#9aa3ad;text-decoration:none;padding:6px 12px;border:1px solid #232833;
@@ -465,9 +462,6 @@ async def _pending_reject(request: web.Request) -> web.Response:
 
 # ── Scammers ─────────────────────────────────────────────────────────────────
 
-_EDIT_FIELDS = ("reason", "severity", "username", "name", "id", "notes", "proof", "payment_info")
-
-
 async def _scammers_page(request: web.Request) -> web.Response:
     try:
         page = max(1, int(request.query.get("page", "1")))
@@ -488,16 +482,7 @@ async def _scammers_page(request: web.Request) -> web.Response:
             f"<span class='badge' style='background:{_SEV_COLOR.get(sev, '#475569')}'>"
             f"{_SEV_ICON.get(sev, '🟡')} {_esc(sev)}</span>"
         )
-        edit_form = (
-            f"<form method=post action=/scammers/edit class='inline editrow'>"
-            f"<input type=hidden name=scammer_id value='{e['id']}'>"
-            f"<select name=field>"
-            + "".join(f"<option value='{f}'>{f}</option>" for f in _EDIT_FIELDS)
-            + "</select>"
-            f"<input type=text name=value placeholder='new value'>"
-            f"<button class='btn btn-blue'>Save</button>"
-            f"</form>"
-        )
+        edit_link = f"<a class='btn btn-gray' href='/scammers/{e['id']}/edit'>✏️ Edit</a>"
         remove_form = (
             f"<form method=post action=/scammers/remove class='inline' "
             f"onsubmit=\"return confirm('Remove #{e['id']}?')\">"
@@ -515,7 +500,7 @@ async def _scammers_page(request: web.Request) -> web.Response:
             f"<td>{_esc((e.get('reason') or '')[:60])}</td>"
             f"<td>{_esc((e.get('payment_info') or '—')[:40])}</td>"
             f"<td>{_when(e.get('added_at'))}</td>"
-            f"<td class='actions'>{edit_form}{remove_form}</td>"
+            f"<td class='actions'>{edit_link}{remove_form}</td>"
             "</tr>"
         )
 
@@ -543,45 +528,103 @@ async def _scammers_page(request: web.Request) -> web.Response:
     return web.Response(text=_layout("Scammers", "/scammers", body), content_type="text/html")
 
 
-async def _scammers_edit(request: web.Request) -> web.Response:
-    data = await request.post()
+async def _scammers_edit_get(request: web.Request) -> web.Response:
     try:
-        scammer_id = int(data.get("scammer_id", ""))
+        scammer_id = int(request.match_info["id"])
     except ValueError:
         raise web.HTTPFound("/scammers")
-
-    field     = (data.get("field") or "").strip().lower()
-    value_raw = (data.get("value") or "").strip()
-
-    if field not in EDITABLE_FIELDS or not value_raw:
-        raise web.HTTPFound("/scammers?err=invalid")
 
     entry = await get_scammer_by_id(scammer_id)
     if not entry:
         raise web.HTTPFound("/scammers")
 
-    if field in ("id", "telegram_id"):
-        if not value_raw.lstrip("-").isdigit():
-            raise web.HTTPFound("/scammers?err=invalid")
-        value: object = int(value_raw)
-    elif field == "severity":
-        value = value_raw.lower()
-        if value not in ("high", "medium", "low"):
-            raise web.HTTPFound("/scammers?err=invalid")
-    elif field == "username":
-        value = value_raw.lstrip("@") or None
-    else:
-        value = value_raw
+    sev = (entry.get("severity") or "medium").lower()
 
-    column    = EDITABLE_FIELDS[field]
-    old_value = entry.get(column)
+    def sev_option(value: str, label: str) -> str:
+        selected = " selected" if sev == value else ""
+        return f"<option value='{value}'{selected}>{label}</option>"
 
-    ok = await update_scammer_field(scammer_id, field, value)
-    if ok:
-        await audit(
-            _WEB_ACTOR, "edit", "scammer", scammer_id,
-            f"{field}: {old_value if old_value not in (None, '') else '—'} → {value} (via web)",
-        )
+    body = (
+        _flash(request)
+        + f"<h1>✏️ Edit Scammer #{entry['id']}</h1>"
+        + f"<form method=post action='/scammers/{entry['id']}/edit' class='formcard'>"
+        + "<label>Telegram ID</label>"
+        + f"<input type=text name=telegram_id value='{_esc(entry.get('telegram_id') or '')}' placeholder='123456789'>"
+        + "<label>Username (without @)</label>"
+        + f"<input type=text name=username value='{_esc(entry.get('username') or '')}' placeholder='username'>"
+        + "<label>Name</label>"
+        + f"<input type=text name=name value='{_esc(entry.get('name') or '')}' placeholder='Display name'>"
+        + "<label>Reason</label>"
+        + f"<textarea name=reason rows=2 required>{_esc(entry.get('reason') or '')}</textarea>"
+        + "<label>Severity</label>"
+        + "<select name=severity>"
+        + sev_option("high", "🔴 High") + sev_option("medium", "🟡 Medium") + sev_option("low", "🟢 Low")
+        + "</select>"
+        + "<label>Payment info (Binance ID / UPI / wallet address)</label>"
+        + f"<input type=text name=payment_info value='{_esc(entry.get('payment_info') or '')}' placeholder='e.g. Binance ID 123456789'>"
+        + "<label>Proof</label>"
+        + f"<textarea name=proof rows=2>{_esc(entry.get('proof') or '')}</textarea>"
+        + "<label>Notes</label>"
+        + f"<textarea name=notes rows=2>{_esc(entry.get('notes') or '')}</textarea>"
+        + "<button class='btn btn-blue'>💾 Save Changes</button>"
+        + " <a class='btn btn-gray' href='/scammers'>Cancel</a>"
+        + "</form>"
+    )
+    return web.Response(text=_layout(f"Edit Scammer #{entry['id']}", "/scammers", body), content_type="text/html")
+
+
+async def _scammers_edit_post(request: web.Request) -> web.Response:
+    try:
+        scammer_id = int(request.match_info["id"])
+    except ValueError:
+        raise web.HTTPFound("/scammers")
+
+    entry = await get_scammer_by_id(scammer_id)
+    if not entry:
+        raise web.HTTPFound("/scammers")
+
+    data = await request.post()
+
+    raw_id   = (data.get("telegram_id") or "").strip().lstrip("@")
+    username = (data.get("username") or "").strip().lstrip("@")
+    name     = (data.get("name") or "").strip()
+    reason   = (data.get("reason") or "").strip()
+    severity = (data.get("severity") or "medium").strip().lower()
+    payment  = (data.get("payment_info") or "").strip()
+    proof    = (data.get("proof") or "").strip()
+    notes    = (data.get("notes") or "").strip()
+
+    if raw_id and not raw_id.lstrip("-").isdigit():
+        raise web.HTTPFound(f"/scammers/{scammer_id}/edit?err=invalid")
+    if not reason:
+        raise web.HTTPFound(f"/scammers/{scammer_id}/edit?err=invalid")
+    if severity not in ("high", "medium", "low"):
+        severity = "medium"
+
+    fields = {
+        "telegram_id":  int(raw_id) if raw_id else None,
+        "username":     username or None,
+        "name":         name or "Unknown",
+        "reason":       reason,
+        "severity":     severity,
+        "payment_info": payment or None,
+        "proof":        proof or None,
+        "notes":        notes or None,
+    }
+
+    changes = []
+    for field, new_value in fields.items():
+        column    = EDITABLE_FIELDS[field]
+        old_value = entry.get(column)
+        if old_value != new_value:
+            old_disp = old_value if old_value not in (None, "") else "—"
+            new_disp = new_value if new_value not in (None, "") else "—"
+            changes.append(f"{field}: {old_disp} → {new_disp}")
+
+    if changes:
+        await update_scammer_fields(scammer_id, fields)
+        await audit(_WEB_ACTOR, "edit", "scammer", scammer_id, "; ".join(changes) + " (via web)")
+
     raise web.HTTPFound("/scammers")
 
 
@@ -871,7 +914,8 @@ async def run_web_admin(bot) -> None:
     app.router.add_get("/scammers", _scammers_page)
     app.router.add_get("/scammers/add", _scammers_add_get)
     app.router.add_post("/scammers/add", _scammers_add_post)
-    app.router.add_post("/scammers/edit", _scammers_edit)
+    app.router.add_get("/scammers/{id}/edit", _scammers_edit_get)
+    app.router.add_post("/scammers/{id}/edit", _scammers_edit_post)
     app.router.add_post("/scammers/remove", _scammers_remove)
 
     app.router.add_get("/admins", _admins_page)
