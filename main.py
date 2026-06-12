@@ -40,7 +40,7 @@ from bot.handlers.force_join   import (
 from bot.handlers.callbacks    import callback_router
 from bot.handlers.emoji_admin  import setemoji_cmd, delemoji_cmd, listemoji_cmd, loadpack_cmd, extractmoji_cmd
 from bot.handlers.trusted      import addtrusted_cmd, removetrusted_cmd, listtrusted_cmd
-from bot.handlers.owner        import addadmin_command, removeadmin_command, listadmins_command
+from bot.handlers.owner        import addadmin_command, removeadmin_command, listadmins_command, webpass_command
 from bot.handlers.new_member   import on_new_member
 from bot.handlers.admin        import (
     build_add_handler,
@@ -138,6 +138,7 @@ async def run() -> None:
     app.add_handler(CommandHandler("addadmin",    addadmin_command))
     app.add_handler(CommandHandler("removeadmin", removeadmin_command))
     app.add_handler(CommandHandler("listadmins",  listadmins_command))
+    app.add_handler(CommandHandler("webpass",     webpass_command, filters=filters.ChatType.PRIVATE))
 
     # Force-join channel/group management (admin)
     app.add_handler(CommandHandler("addchannel",    addchannel_command))
@@ -185,6 +186,7 @@ async def run() -> None:
         BotCommand("removetrusted", "Remove trusted reporter (admin)"),
         BotCommand("listtrusted",   "List trusted reporters (admin)"),
         BotCommand("listadmins",    "List bot admins (admin)"),
+        BotCommand("webpass",       "Set your web panel password (admin)"),
     ]
 
     await app.initialize()

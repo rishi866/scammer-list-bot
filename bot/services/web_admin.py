@@ -4,19 +4,28 @@ Pages:
   /            dashboard (counts, admins, trusted reporters, recent actions)
   /pending     pending reports — approve (high/medium/low) or reject
   /scammers    scammer list — edit fields, remove, or add a new entry
-  /admins      manage admins + trusted reporters
+  /admins      manage admins + trusted reporters (owner only)
 
 Every action here mirrors the matching bot command (/approve, /reject, /edit,
 /remove, /addid, /addadmin, /removeadmin, /addtrusted, /removetrusted) —
 broadcasts, kicks, and audit-log entries all happen exactly the same way, just
-tagged "(via web)" and attributed to the "🌐 Web Panel" / @web-admin actor.
+tagged "(via web)" and attributed to the admin who performed it.
 
-Opt-in: does nothing unless BOTH WEB_ADMIN_PORT and WEB_ADMIN_PASS are set in
-.env. Protected by HTTP Basic auth (WEB_ADMIN_USER / WEB_ADMIN_PASS).
+Auth: two ways to log in (HTTP Basic auth)
+  - Owner bootstrap: WEB_ADMIN_USER / WEB_ADMIN_PASS from .env (role=owner).
+  - Per-admin: any bot admin runs /webpass <password> in PM; their web
+    username becomes their Telegram @handle (or id<telegram_id>). Role is
+    "owner" or "admin" based on bot.services.admins (is_owner / get_admin_ids).
+
+Role differences: admins get the full edit + monitor toolset (dashboard,
+pending, scammers) but the "👥 Admins" page (admin roster + trusted
+reporters) is owner-only — both hidden from nav and 403'd if hit directly.
+
+Opt-in: does nothing unless WEB_ADMIN_PORT is set in .env.
 
 Security note: Basic auth over plain HTTP sends the password in (base64, not
 encrypted) on every request. For anything public, put it behind nginx + HTTPS
-or reach it over an SSH tunnel. Use a long random WEB_ADMIN_PASS.
+or reach it over an SSH tunnel. Use a long random WEB_ADMIN_PASS / /webpass.
 """
 from __future__ import annotations
 
@@ -27,6 +36,7 @@ import logging
 import os
 import secrets
 from types import SimpleNamespace
+from typing import Optional
 
 from aiohttp import web
 from telegram.error import TelegramError
@@ -38,19 +48,18 @@ from bot.db import (
     list_scammers, count_scammers, get_scammer_by_id,
     update_scammer_fields, remove_scammer, EDITABLE_FIELDS,
     add_trusted_reporter, remove_trusted_reporter,
+    get_web_credentials_by_username, list_web_credentials, delete_web_credentials,
 )
 from bot.services.admins import (
-    list_all_admins, add_admin, remove_admin, is_owner,
-    resolve_protected_role,
+    list_all_admins, add_admin, remove_admin, is_owner, owner_id,
+    get_admin_ids, resolve_protected_role,
 )
 from bot.services.audit import audit
 from bot.services.broadcaster import broadcast_scammer
 from bot.services.emoji_fx import em
+from bot.services.webauth import verify_password
 
 logger = logging.getLogger(__name__)
-
-# Pseudo-actor for audit log entries created from the web panel (no Telegram user).
-_WEB_ACTOR = SimpleNamespace(id=0, username="web-admin")
 
 _ROLE_LABEL = {"owner": "👑 Owner", "env": "🔧 Admin (.env)", "db": "🛠 Admin"}
 
@@ -128,32 +137,73 @@ _NAV = [
 
 # ── Auth ─────────────────────────────────────────────────────────────────────
 
-def _authorized(request: web.Request) -> bool:
-    user = os.getenv("WEB_ADMIN_USER", "admin")
-    pw   = os.getenv("WEB_ADMIN_PASS", "")
-    if not pw:
-        return False
+async def _authenticate(request: web.Request) -> Optional[dict]:
+    """Return {"id", "username", "role"} for valid credentials, else None.
+
+    Two ways in: the WEB_ADMIN_USER/PASS env bootstrap (always role=owner),
+    or a per-admin login set via /webpass (role derived from is_owner /
+    get_admin_ids — a revoked admin's row is deleted by /removeadmin, but we
+    re-check membership here too as a defense-in-depth measure).
+    """
     hdr = request.headers.get("Authorization", "")
     if not hdr.startswith("Basic "):
-        return False
+        return None
     try:
         raw = base64.b64decode(hdr[6:]).decode("utf-8")
-        u, _, p = raw.partition(":")
+        user, _, pw = raw.partition(":")
     except Exception:
-        return False
-    return secrets.compare_digest(u, user) and secrets.compare_digest(p, pw)
+        return None
+    if not user or not pw:
+        return None
+
+    env_user = os.getenv("WEB_ADMIN_USER", "admin")
+    env_pass = os.getenv("WEB_ADMIN_PASS", "")
+    if env_pass and secrets.compare_digest(user, env_user) and secrets.compare_digest(pw, env_pass):
+        return {"id": owner_id(), "username": env_user, "role": "owner"}
+
+    cred = await get_web_credentials_by_username(user)
+    if not cred:
+        return None
+
+    loop = asyncio.get_event_loop()
+    ok = await loop.run_in_executor(None, verify_password, pw, cred["password_hash"], cred["salt"])
+    if not ok:
+        return None
+
+    telegram_id = cred["telegram_id"]
+    if is_owner(telegram_id):
+        role = "owner"
+    elif telegram_id in get_admin_ids():
+        role = "admin"
+    else:
+        return None
+
+    return {"id": telegram_id, "username": cred["username"], "role": role}
+
+
+def _actor_ns(request: web.Request) -> SimpleNamespace:
+    """The logged-in web user as an actor for audit()/_broadcast_resolution()."""
+    wu = request["web_user"]
+    return SimpleNamespace(id=wu["id"], username=wu["username"])
+
+
+def _require_owner(request: web.Request) -> None:
+    if request["web_user"]["role"] != "owner":
+        raise web.HTTPForbidden(text="403 Forbidden — owner only")
 
 
 @web.middleware
 async def _auth_mw(request: web.Request, handler):
     if request.path == "/health":
         return await handler(request)
-    if not _authorized(request):
+    web_user = await _authenticate(request)
+    if web_user is None:
         return web.Response(
             status=401,
             headers={"WWW-Authenticate": 'Basic realm="Scammer Bot Admin"'},
             text="401 Unauthorized",
         )
+    request["web_user"] = web_user
     return await handler(request)
 
 
@@ -176,10 +226,11 @@ def _when(dt) -> str:
         return _esc(dt)
 
 
-def _layout(title: str, active: str, body: str, refresh: bool = False) -> str:
+def _layout(title: str, active: str, body: str, *, role: str = "owner", refresh: bool = False) -> str:
+    nav = _NAV if role == "owner" else [item for item in _NAV if item[0] != "/admins"]
     nav_html = "".join(
         f'<a href="{href}" class="navlink{" active" if href == active else ""}">{label}</a>'
-        for href, label in _NAV
+        for href, label in nav
     )
     refresh_tag = "<meta http-equiv='refresh' content='30'>" if refresh else ""
     return (
@@ -204,36 +255,45 @@ def _flash(request: web.Request) -> str:
 # ── Dashboard ────────────────────────────────────────────────────────────────
 
 async def _index(request: web.Request) -> web.Response:
-    actions  = await recent_admin_actions(300)
-    counts   = await admin_action_counts()
-    admins   = await list_all_admins()
-    trusted  = await list_trusted_reporters()
-    total    = await count_scammers()
-    pending  = await count_reports("pending")
+    role    = request["web_user"]["role"]
+    actions = await recent_admin_actions(300)
+    total   = await count_scammers()
+    pending = await count_reports("pending")
 
-    cards = (
-        f'<a class="card" href="/scammers"><div class="n">{total}</div><div class="l">Scammers listed</div></a>'
-        f'<a class="card" href="/pending"><div class="n">{pending}</div><div class="l">Pending reports</div></a>'
-        f'<a class="card" href="/admins"><div class="n">{len(admins)}</div><div class="l">Admins</div></a>'
-        f'<a class="card" href="/admins"><div class="n">{len(trusted)}</div><div class="l">Trusted reporters</div></a>'
-    )
+    if role == "owner":
+        counts  = await admin_action_counts()
+        admins  = await list_all_admins()
+        trusted = await list_trusted_reporters()
 
-    count_map = {c["actor_id"]: c for c in counts}
-    arows = []
-    for a in admins:
-        c = count_map.get(a["telegram_id"]) or {}
-        arows.append(
-            "<tr>"
-            f'<td>{_ROLE_LABEL.get(a.get("source"), "Admin")}</td>'
-            f'<td class="mono">{_esc(a["telegram_id"])}</td>'
-            f'<td>{_esc(c.get("total") or 0)}</td>'
-            f'<td>{_when(c["last_action"]) if c.get("last_action") else "<span class=muted>never</span>"}</td>'
-            "</tr>"
+        cards = (
+            f'<a class="card" href="/scammers"><div class="n">{total}</div><div class="l">Scammers listed</div></a>'
+            f'<a class="card" href="/pending"><div class="n">{pending}</div><div class="l">Pending reports</div></a>'
+            f'<a class="card" href="/admins"><div class="n">{len(admins)}</div><div class="l">Admins</div></a>'
+            f'<a class="card" href="/admins"><div class="n">{len(trusted)}</div><div class="l">Trusted reporters</div></a>'
         )
-    admins_html = (
-        "<h2>Admins</h2><table><tr><th>Role</th><th>Telegram ID</th>"
-        "<th>Actions</th><th>Last action</th></tr>" + "".join(arows) + "</table>"
-    )
+
+        count_map = {c["actor_id"]: c for c in counts}
+        arows = []
+        for a in admins:
+            c = count_map.get(a["telegram_id"]) or {}
+            arows.append(
+                "<tr>"
+                f'<td>{_ROLE_LABEL.get(a.get("source"), "Admin")}</td>'
+                f'<td class="mono">{_esc(a["telegram_id"])}</td>'
+                f'<td>{_esc(c.get("total") or 0)}</td>'
+                f'<td>{_when(c["last_action"]) if c.get("last_action") else "<span class=muted>never</span>"}</td>'
+                "</tr>"
+            )
+        admins_html = (
+            "<h2>Admins</h2><table><tr><th>Role</th><th>Telegram ID</th>"
+            "<th>Actions</th><th>Last action</th></tr>" + "".join(arows) + "</table>"
+        )
+    else:
+        cards = (
+            f'<a class="card" href="/scammers"><div class="n">{total}</div><div class="l">Scammers listed</div></a>'
+            f'<a class="card" href="/pending"><div class="n">{pending}</div><div class="l">Pending reports</div></a>'
+        )
+        admins_html = ""
 
     rows = []
     for a in actions:
@@ -261,7 +321,7 @@ async def _index(request: web.Request) -> web.Response:
         f"<div class='cards'>{cards}</div>"
         f"{admins_html}{actions_html}"
     )
-    return web.Response(text=_layout("Dashboard", "/", body, refresh=True), content_type="text/html")
+    return web.Response(text=_layout("Dashboard", "/", body, role=role, refresh=True), content_type="text/html")
 
 
 async def _health(request: web.Request) -> web.Response:
@@ -271,11 +331,12 @@ async def _health(request: web.Request) -> web.Response:
 # ── Pending reports ──────────────────────────────────────────────────────────
 
 async def _pending_page(request: web.Request) -> web.Response:
+    role    = request["web_user"]["role"]
     reports = await list_pending_reports()
 
     if not reports:
         body = _flash(request) + "<h1>📨 Pending Reports</h1><p class='muted'>No pending reports. 🎉</p>"
-        return web.Response(text=_layout("Pending Reports", "/pending", body), content_type="text/html")
+        return web.Response(text=_layout("Pending Reports", "/pending", body, role=role), content_type="text/html")
 
     rows = []
     for r in reports:
@@ -313,10 +374,10 @@ async def _pending_page(request: web.Request) -> web.Response:
         "<th>Reporter</th><th>When</th><th>Actions</th></tr>" + "".join(rows) + "</table>"
     )
     body = _flash(request) + f"<h1>📨 Pending Reports ({len(reports)})</h1>" + table
-    return web.Response(text=_layout("Pending Reports", "/pending", body), content_type="text/html")
+    return web.Response(text=_layout("Pending Reports", "/pending", body, role=role), content_type="text/html")
 
 
-async def _do_approve(bot, report: dict, severity: str) -> int | None:
+async def _do_approve(bot, report: dict, severity: str, actor: SimpleNamespace) -> int | None:
     """Approve a report — same effects as the ✅ button / /approve command.
 
     Returns the new scammer's ID, or None if the target was already listed
@@ -329,15 +390,15 @@ async def _do_approve(bot, report: dict, severity: str) -> int | None:
         await update_report_status(report["id"], "rejected")
         await _broadcast_resolution(
             SimpleNamespace(bot=bot),
-            actor="🌐 Web Panel",
-            actor_id=0,
+            actor=f"🌐 {actor.username} (web)",
+            actor_id=actor.id,
             headline=(
                 f"♻️ <b>Submission #{report['id']} auto-rejected</b> — duplicate of Scammer #{dup['id']}\n"
                 f"🎯 {_target_str(report)}"
             ),
         )
         _tgt = f"@{report['target_username']}" if report.get("target_username") else (str(report.get("target_id")) if report.get("target_id") else "—")
-        await audit(_WEB_ACTOR, "auto_reject_dup", "report", report["id"], f"dup_of=#{dup['id']} target={_tgt} (via web)")
+        await audit(actor, "auto_reject_dup", "report", report["id"], f"dup_of=#{dup['id']} target={_tgt} (via web)")
         return None
 
     scammer_id = await add_scammer(
@@ -399,8 +460,8 @@ async def _do_approve(bot, report: dict, severity: str) -> int | None:
 
     await _broadcast_resolution(
         SimpleNamespace(bot=bot),
-        actor="🌐 Web Panel",
-        actor_id=0,
+        actor=f"🌐 {actor.username} (web)",
+        actor_id=actor.id,
         headline=(
             f"✅ <b>Submission #{report['id']} approved</b> — {sev_icon} {severity.capitalize()}\n"
             f"🎯 {_target_str(report)} → Scammer #{scammer_id}"
@@ -408,7 +469,7 @@ async def _do_approve(bot, report: dict, severity: str) -> int | None:
     )
 
     _tgt = f"@{report['target_username']}" if report.get("target_username") else (str(report.get("target_id")) if report.get("target_id") else "—")
-    await audit(_WEB_ACTOR, "approve", "scammer", scammer_id,
+    await audit(actor, "approve", "scammer", scammer_id,
                 f"sev={severity} target={_tgt} report#{report['id']} (via web)")
     return scammer_id
 
@@ -428,7 +489,7 @@ async def _pending_approve(request: web.Request) -> web.Response:
     if not report or report["status"] != "pending":
         raise web.HTTPFound("/pending")
 
-    scammer_id = await _do_approve(request.app["bot"], report, severity)
+    scammer_id = await _do_approve(request.app["bot"], report, severity, _actor_ns(request))
     if scammer_id is None:
         raise web.HTTPFound("/pending?err=dup")
     raise web.HTTPFound("/pending")
@@ -447,16 +508,17 @@ async def _pending_reject(request: web.Request) -> web.Response:
 
     await update_report_status(rid, "rejected")
 
+    actor = _actor_ns(request)
     from bot.handlers.callbacks import _broadcast_resolution, _target_str
     await _broadcast_resolution(
         SimpleNamespace(bot=request.app["bot"]),
-        actor="🌐 Web Panel",
-        actor_id=0,
+        actor=f"🌐 {actor.username} (web)",
+        actor_id=actor.id,
         headline=f"❌ <b>Submission #{rid} rejected</b>\n🎯 {_target_str(report)}",
     )
 
     _tgt = f"@{report['target_username']}" if report.get("target_username") else (str(report.get("target_id")) if report.get("target_id") else "—")
-    await audit(_WEB_ACTOR, "reject", "report", rid, f"target={_tgt} (via web)")
+    await audit(actor, "reject", "report", rid, f"target={_tgt} (via web)")
     raise web.HTTPFound("/pending")
 
 
@@ -525,7 +587,7 @@ async def _scammers_page(request: web.Request) -> web.Response:
         + "<p><a class='btn btn-blue' href='/scammers/add'>➕ Add Scammer</a></p>"
         + table + pager
     )
-    return web.Response(text=_layout("Scammers", "/scammers", body), content_type="text/html")
+    return web.Response(text=_layout("Scammers", "/scammers", body, role=request["web_user"]["role"]), content_type="text/html")
 
 
 async def _scammers_edit_get(request: web.Request) -> web.Response:
@@ -570,7 +632,7 @@ async def _scammers_edit_get(request: web.Request) -> web.Response:
         + " <a class='btn btn-gray' href='/scammers'>Cancel</a>"
         + "</form>"
     )
-    return web.Response(text=_layout(f"Edit Scammer #{entry['id']}", "/scammers", body), content_type="text/html")
+    return web.Response(text=_layout(f"Edit Scammer #{entry['id']}", "/scammers", body, role=request["web_user"]["role"]), content_type="text/html")
 
 
 async def _scammers_edit_post(request: web.Request) -> web.Response:
@@ -623,7 +685,7 @@ async def _scammers_edit_post(request: web.Request) -> web.Response:
 
     if changes:
         await update_scammer_fields(scammer_id, fields)
-        await audit(_WEB_ACTOR, "edit", "scammer", scammer_id, "; ".join(changes) + " (via web)")
+        await audit(_actor_ns(request), "edit", "scammer", scammer_id, "; ".join(changes) + " (via web)")
 
     raise web.HTTPFound("/scammers")
 
@@ -640,7 +702,7 @@ async def _scammers_remove(request: web.Request) -> web.Response:
         ok = await remove_scammer(scammer_id)
         if ok:
             uname = f"@{entry['username']}" if entry.get("username") else f"ID {entry.get('telegram_id') or '—'}"
-            await audit(_WEB_ACTOR, "remove", "scammer", scammer_id, f"{uname} (via web)")
+            await audit(_actor_ns(request), "remove", "scammer", scammer_id, f"{uname} (via web)")
     raise web.HTTPFound("/scammers")
 
 
@@ -668,7 +730,7 @@ async def _scammers_add_get(request: web.Request) -> web.Response:
         + "<p class='muted'>Bot will auto-fetch username/name from Telegram, kick the user "
         + "from all groups, and broadcast the alert to every group — same as /addid.</p>"
     )
-    return web.Response(text=_layout("Add Scammer", "/scammers", body), content_type="text/html")
+    return web.Response(text=_layout("Add Scammer", "/scammers", body, role=request["web_user"]["role"]), content_type="text/html")
 
 
 async def _scammers_add_post(request: web.Request) -> web.Response:
@@ -737,15 +799,18 @@ async def _scammers_add_post(request: web.Request) -> web.Response:
     await broadcast_scammer(bot, scammer_id, username, telegram_id, reason, severity=severity, payment_info=payment_info)
 
     uname_str = f"@{username}" if username else (str(telegram_id) if telegram_id else "—")
-    await audit(_WEB_ACTOR, "addid", "scammer", scammer_id, f"{uname_str} (via web)")
+    await audit(_actor_ns(request), "addid", "scammer", scammer_id, f"{uname_str} (via web)")
 
     raise web.HTTPFound("/scammers")
 
 
-# ── Admins & trusted reporters ──────────────────────────────────────────────
+# ── Admins & trusted reporters (owner only) ─────────────────────────────────
 
 async def _admins_page(request: web.Request) -> web.Response:
+    _require_owner(request)
+
     admins = await list_all_admins()
+    creds_map = {c["telegram_id"]: c for c in await list_web_credentials()}
     arows = []
     for a in admins:
         tag = _ROLE_LABEL.get(a.get("source"), "Admin")
@@ -760,15 +825,21 @@ async def _admins_page(request: web.Request) -> web.Response:
                 f"<input type=hidden name=telegram_id value='{a['telegram_id']}'>"
                 f"<button class='btn btn-red'>Remove</button></form>"
             )
+        cred = creds_map.get(a["telegram_id"])
+        if cred:
+            web_login = f"@{_esc(cred['username'])} <span class='muted'>(set {_esc(str(cred.get('updated_at',''))[:10])})</span>"
+        else:
+            web_login = "<span class='muted'>Not set — /webpass</span>"
         arows.append(
             "<tr>"
             f"<td>{tag}</td>"
             f"<td class='mono'>{a['telegram_id']}</td>"
+            f"<td>{web_login}</td>"
             f"<td>{remove_cell}</td>"
             "</tr>"
         )
     admins_table = (
-        "<table><tr><th>Role</th><th>Telegram ID</th><th>Action</th></tr>"
+        "<table><tr><th>Role</th><th>Telegram ID</th><th>Web Login</th><th>Action</th></tr>"
         + "".join(arows) + "</table>"
     )
     add_admin_form = (
@@ -813,10 +884,12 @@ async def _admins_page(request: web.Request) -> web.Response:
         + "<h2>Admins</h2>" + admins_table + add_admin_form
         + "<h2>Trusted reporters (auto-approve)</h2>" + trusted_table + add_trusted_form
     )
-    return web.Response(text=_layout("Admins", "/admins", body), content_type="text/html")
+    return web.Response(text=_layout("Admins", "/admins", body, role="owner"), content_type="text/html")
 
 
 async def _admins_add(request: web.Request) -> web.Response:
+    _require_owner(request)
+
     data = await request.post()
     raw  = (data.get("telegram_id") or "").strip().lstrip("@")
     if not raw.lstrip("-").isdigit():
@@ -828,7 +901,7 @@ async def _admins_add(request: web.Request) -> web.Response:
 
     added = await add_admin(target_id, 0)
     if added:
-        await audit(_WEB_ACTOR, "addadmin", "admin", target_id, "via web")
+        await audit(_actor_ns(request), "addadmin", "admin", target_id, "via web")
         try:
             await request.app["bot"].send_message(
                 target_id,
@@ -841,17 +914,22 @@ async def _admins_add(request: web.Request) -> web.Response:
 
 
 async def _admins_remove(request: web.Request) -> web.Response:
+    _require_owner(request)
+
     data = await request.post()
     raw  = (data.get("telegram_id") or "").strip().lstrip("@")
     if raw.lstrip("-").isdigit():
         target_id = int(raw)
         result = await remove_admin(target_id)
         if result == "removed":
-            await audit(_WEB_ACTOR, "removeadmin", "admin", target_id, "via web")
+            await audit(_actor_ns(request), "removeadmin", "admin", target_id, "via web")
+            await delete_web_credentials(target_id)
     raise web.HTTPFound("/admins")
 
 
 async def _trusted_add(request: web.Request) -> web.Response:
+    _require_owner(request)
+
     data   = await request.post()
     target = (data.get("target") or "").strip()
     if not target:
@@ -874,11 +952,13 @@ async def _trusted_add(request: web.Request) -> web.Response:
 
     await add_trusted_reporter(user_id, username, 0)
     uname_display = f"@{username}" if username else str(user_id)
-    await audit(_WEB_ACTOR, "addtrusted", "user", user_id, f"{uname_display} (via web)")
+    await audit(_actor_ns(request), "addtrusted", "user", user_id, f"{uname_display} (via web)")
     raise web.HTTPFound("/admins")
 
 
 async def _trusted_remove(request: web.Request) -> web.Response:
+    _require_owner(request)
+
     data = await request.post()
     raw  = (data.get("user_id") or "").strip()
     if raw.isdigit():
@@ -888,17 +968,17 @@ async def _trusted_remove(request: web.Request) -> web.Response:
         ok = await remove_trusted_reporter(user_id)
         if ok:
             uname = f"@{match['username']}" if match and match.get("username") else str(user_id)
-            await audit(_WEB_ACTOR, "removetrusted", "user", user_id, f"{uname} (via web)")
+            await audit(_actor_ns(request), "removetrusted", "user", user_id, f"{uname} (via web)")
     raise web.HTTPFound("/admins")
 
 
 # ── Entry point ──────────────────────────────────────────────────────────────
 
 async def run_web_admin(bot) -> None:
-    """Background task — serves the panel if WEB_ADMIN_PORT + WEB_ADMIN_PASS set."""
+    """Background task — serves the panel if WEB_ADMIN_PORT is set."""
     port = int(os.getenv("WEB_ADMIN_PORT", "0") or "0")
-    if not port or not os.getenv("WEB_ADMIN_PASS"):
-        logger.info("Web admin disabled (set WEB_ADMIN_PORT + WEB_ADMIN_PASS to enable)")
+    if not port:
+        logger.info("Web admin disabled (set WEB_ADMIN_PORT to enable)")
         return
 
     app = web.Application(middlewares=[_auth_mw])

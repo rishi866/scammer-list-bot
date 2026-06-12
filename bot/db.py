@@ -141,6 +141,14 @@ async def init_db() -> None:
                 added_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
             );
 
+            CREATE TABLE IF NOT EXISTS web_credentials (
+                telegram_id   BIGINT PRIMARY KEY,
+                username      TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                salt          TEXT NOT NULL,
+                updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+
             CREATE TABLE IF NOT EXISTS bot_users (
                 telegram_id BIGINT PRIMARY KEY,
                 username    TEXT,
@@ -709,6 +717,35 @@ async def remove_admin(telegram_id: int) -> bool:
 async def list_admins() -> list[dict]:
     pool = await _get_pool()
     return _rows(await pool.fetch("SELECT * FROM bot_admins ORDER BY added_at ASC"))
+
+
+# ── Web panel credentials (per-admin login for bot/services/web_admin.py) ─────
+
+async def set_web_credentials(telegram_id: int, username: str, password_hash: str, salt: str) -> None:
+    pool = await _get_pool()
+    await pool.execute(
+        """INSERT INTO web_credentials (telegram_id, username, password_hash, salt, updated_at)
+           VALUES ($1, $2, $3, $4, NOW())
+           ON CONFLICT (telegram_id) DO UPDATE
+             SET username=$2, password_hash=$3, salt=$4, updated_at=NOW()""",
+        telegram_id, username, password_hash, salt,
+    )
+
+
+async def get_web_credentials_by_username(username: str) -> Optional[dict]:
+    pool = await _get_pool()
+    return _row(await pool.fetchrow("SELECT * FROM web_credentials WHERE username = $1", username))
+
+
+async def list_web_credentials() -> list[dict]:
+    pool = await _get_pool()
+    return _rows(await pool.fetch("SELECT * FROM web_credentials"))
+
+
+async def delete_web_credentials(telegram_id: int) -> bool:
+    pool = await _get_pool()
+    result = await pool.execute("DELETE FROM web_credentials WHERE telegram_id = $1", telegram_id)
+    return result.endswith("1")
 
 
 # ── Bot Users (track who has /start'd the bot, for "new user" notifications) ──
