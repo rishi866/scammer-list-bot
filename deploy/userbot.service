@@ -1,0 +1,18 @@
+[Unit]
+Description=Scammer List — Userbot Member Harvester
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=botuser
+WorkingDirectory=/home/botuser/scammer-list-bot
+EnvironmentFile=/home/botuser/scammer-list-bot/.env
+ExecStart=/home/botuser/scammer-list-bot/venv/bin/python -m userbot.harvester
+Restart=always
+RestartSec=30
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

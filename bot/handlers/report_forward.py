@@ -118,22 +118,25 @@ async def on_addid_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     except Exception:
         pass
 
+    history = []
     if fetched:
         fetch_note = "✅ Details fetched from Telegram"
     else:
-        # Fallback: bot may have passively seen this user before (a message
-        # or join in a group the bot is in), even though get_chat() can't
-        # reach them directly right now.
+        # Fallback: bot may have passively seen this user before (a message,
+        # join, or the userbot harvester scraping a group), even though
+        # get_chat() can't reach them directly right now.
         from bot.db import get_bot_user
         cached = await get_bot_user(telegram_id)
         if cached and (cached.get("username") or cached.get("full_name")):
             username   = cached.get("username")
             full_name  = cached.get("full_name") or "Unknown"
+            history    = [u for u in (cached.get("username_history") or []) if u]
             fetch_note = "📦 Details from bot's seen-users cache (last seen earlier)"
         else:
             fetch_note = "⚠️ Could not fetch — tracked by ID only"
 
-    uname_str = f"@{username}" if username else "—"
+    uname_str    = f"@{username}" if username else "—"
+    history_line = ("\n🔄 Past usernames: " + ", ".join(f"@{u}" for u in history)) if history else ""
 
     # ── ADMIN: direct add + kick ──────────────────────────────────────────────
     if _is_admin(uid):
@@ -163,7 +166,8 @@ async def on_addid_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 f"✅ <b>Scammer #{scammer_id} added!</b>\n\n"
                 f"🔑 Telegram ID : <code>{telegram_id}</code>\n"
                 f"📝 Username    : {uname_str}\n"
-                f"👤 Name        : {full_name}\n"
+                f"👤 Name        : {full_name}"
+                f"{history_line}\n"
                 f"⚠️ Reason      : {reason}\n\n"
                 f"{fetch_note}"
                 f"{kick_line}"
@@ -215,7 +219,8 @@ async def on_addid_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             f"🔍 <b>Reporting:</b>\n\n"
             f"🔑 Tele ID  : <code>{telegram_id}</code>\n"
             f"📝 Username : {uname_str}\n"
-            f"👤 Name     : <b>{full_name}</b>\n"
+            f"👤 Name     : <b>{full_name}</b>"
+            f"{history_line}\n"
             f"⚠️ Reason   : {reason}\n"
             f"ℹ️ {fetch_note}\n\n"
             f"📸 <b>Send proof</b> (screenshot/photo) or /skip\n"

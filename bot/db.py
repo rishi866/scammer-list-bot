@@ -156,6 +156,7 @@ async def init_db() -> None:
             ("reports",  "target_full_name",    "TEXT"),
             ("reports",  "group_chat_id",       "BIGINT"),
             ("reports",  "proof_file_id",       "TEXT"),
+            ("bot_users", "username_history",   "TEXT[] DEFAULT '{}'"),
         ]:
             await conn.execute(
                 f"ALTER TABLE {tbl} ADD COLUMN IF NOT EXISTS {col} {definition};"
@@ -644,17 +645,42 @@ async def upsert_bot_user(telegram_id: int, username: Optional[str], full_name: 
     can avoid re-sending "new user" notifications for the same person.
     """
     pool = await _get_pool()
-    row = await pool.fetchrow(
-        """INSERT INTO bot_users (telegram_id, username, full_name)
-           VALUES ($1, $2, $3)
-           ON CONFLICT (telegram_id) DO UPDATE
-               SET username  = EXCLUDED.username,
-                   full_name = EXCLUDED.full_name,
-                   last_seen = NOW()
-           RETURNING (xmax = 0) AS is_new""",
-        telegram_id, username, full_name,
-    )
+    row = await pool.fetchrow(_UPSERT_BOT_USER_SQL + " RETURNING (xmax = 0) AS is_new",
+                              telegram_id, username, full_name)
     return bool(row["is_new"])
+
+
+# Shared upsert — keeps username/name current AND appends the OLD username to
+# username_history whenever it changes (so we accumulate every alias we've
+# ever seen for this id). Used by both passive tracking and the userbot
+# harvester.
+_UPSERT_BOT_USER_SQL = """
+    INSERT INTO bot_users (telegram_id, username, full_name)
+    VALUES ($1, $2, $3)
+    ON CONFLICT (telegram_id) DO UPDATE SET
+        username  = EXCLUDED.username,
+        full_name = COALESCE(EXCLUDED.full_name, bot_users.full_name),
+        last_seen = NOW(),
+        username_history = CASE
+            WHEN bot_users.username IS DISTINCT FROM EXCLUDED.username
+                 AND bot_users.username IS NOT NULL
+                 AND NOT (bot_users.username = ANY(COALESCE(bot_users.username_history, '{}')))
+            THEN array_append(COALESCE(bot_users.username_history, '{}'), bot_users.username)
+            ELSE bot_users.username_history
+        END
+"""
+
+
+async def upsert_bot_users_bulk(rows: list[tuple]) -> int:
+    """Bulk upsert (telegram_id, username, full_name) tuples — for the userbot
+    harvester dumping whole member lists. Tracks username history like the
+    single upsert. Returns the number of rows processed.
+    """
+    if not rows:
+        return 0
+    pool = await _get_pool()
+    await pool.executemany(_UPSERT_BOT_USER_SQL, rows)
+    return len(rows)
 
 
 async def get_bot_user(telegram_id: int) -> Optional[dict]:

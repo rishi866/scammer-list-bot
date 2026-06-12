@@ -371,10 +371,13 @@ async def refreshusername_command(update: Update, context: ContextTypes.DEFAULT_
         if cached and (cached.get("username") or cached.get("full_name")):
             cu   = f"@{cached['username']}" if cached.get("username") else "—"
             cn   = cached.get("full_name") or "—"
+            past = [u for u in (cached.get("username_history") or []) if u]
+            ph   = ("\n   Past    : " + ", ".join(f"@{u}" for u in past)) if past else ""
             hint = (
                 f"\n\n📦 <b>But found in seen-users cache:</b>\n"
                 f"   Username: {cu}\n"
-                f"   Name    : {cn}\n\n"
+                f"   Name    : {cn}"
+                f"{ph}\n\n"
                 f"<code>/edit {seq} username {cached.get('username') or ''}</code>\n"
                 f"<code>/edit {seq} name {cn}</code>"
             )

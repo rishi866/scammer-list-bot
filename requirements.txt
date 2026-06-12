@@ -2,3 +2,7 @@ python-telegram-bot==21.10
 asyncpg==0.30.0
 python-dotenv==1.0.1
 httpx==0.27.2
+
+# Optional — only needed if you run the userbot member-list harvester
+# (userbot/harvester.py). The main bot runs fine without it.
+telethon==1.36.0
