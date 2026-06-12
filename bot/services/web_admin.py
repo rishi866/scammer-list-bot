@@ -13,9 +13,10 @@ tagged "(via web)" and attributed to the admin who performed it.
 
 Auth: two ways to log in (HTTP Basic auth)
   - Owner bootstrap: WEB_ADMIN_USER / WEB_ADMIN_PASS from .env (role=owner).
-  - Per-admin: any bot admin runs /webpass <password> in PM; their web
-    username becomes their Telegram @handle (or id<telegram_id>). Role is
-    "owner" or "admin" based on bot.services.admins (is_owner / get_admin_ids).
+  - Per-admin: a web_credentials row, either set by the admin themselves via
+    /webpass <password> in PM, or set/changed by the owner directly from the
+    "👥 Admins" page (per-admin username + password form). Role is "owner" or
+    "admin" based on bot.services.admins (is_owner / get_admin_ids).
 
 Role differences: admins get the full edit + monitor toolset (dashboard,
 pending, scammers) but the "👥 Admins" page (admin roster + trusted
@@ -49,6 +50,7 @@ from bot.db import (
     update_scammer_fields, remove_scammer, EDITABLE_FIELDS,
     add_trusted_reporter, remove_trusted_reporter,
     get_web_credentials_by_username, list_web_credentials, delete_web_credentials,
+    set_web_credentials,
 )
 from bot.services.admins import (
     list_all_admins, add_admin, remove_admin, is_owner, owner_id,
@@ -57,7 +59,7 @@ from bot.services.admins import (
 from bot.services.audit import audit
 from bot.services.broadcaster import broadcast_scammer
 from bot.services.emoji_fx import em
-from bot.services.webauth import verify_password
+from bot.services.webauth import verify_password, hash_password
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +82,12 @@ _ERR_MSG = {
     "protected": "That account belongs to the bot owner/an admin — can't be added.",
     "notfound":  "Could not resolve that user on Telegram.",
     "already":   "That user is already the owner.",
+    "short":     "Password must be at least 6 characters.",
+    "taken":     "That web username is already taken by another admin — pick another.",
+}
+
+_OK_MSG = {
+    "webpass": "✅ Web login updated.",
 }
 
 _CSS = """
@@ -113,9 +121,12 @@ tr:last-child td{border-bottom:none}
 .btn-red{background:#dc2626}.btn-green{background:#16a34a}.btn-orange{background:#d97706}
 .btn-blue{background:#2563eb}.btn-gray{background:#475569}.btn-purple{background:#7c3aed}
 .inline{display:inline-block;margin:0}
+.inline input{background:#0f1115;color:#e6e8eb;border:1px solid #232833;border-radius:6px;
+  padding:4px 6px;font-size:12px;font-family:inherit;width:88px}
 .actions{white-space:nowrap}
 .flash{padding:10px 14px;border-radius:8px;margin-bottom:14px;font-size:13px}
 .flash.err{background:#3f1d1d;border:1px solid #7f1d1d;color:#fca5a5}
+.flash.ok{background:#16321f;border:1px solid #15803d;color:#86efac}
 .formcard{background:#171a21;border:1px solid #232833;border-radius:10px;
   padding:16px;margin-bottom:20px;max-width:480px}
 .formcard label{display:block;font-size:12px;color:#9aa3ad;margin:8px 0 4px}
@@ -247,9 +258,12 @@ def _layout(title: str, active: str, body: str, *, role: str = "owner", refresh:
 
 def _flash(request: web.Request) -> str:
     err = request.query.get("err")
-    if not err:
-        return ""
-    return f"<div class='flash err'>{_esc(_ERR_MSG.get(err, err))}</div>"
+    if err:
+        return f"<div class='flash err'>{_esc(_ERR_MSG.get(err, err))}</div>"
+    ok = request.query.get("ok")
+    if ok:
+        return f"<div class='flash ok'>{_esc(_OK_MSG.get(ok, ok))}</div>"
+    return ""
 
 
 # ── Dashboard ────────────────────────────────────────────────────────────────
@@ -827,9 +841,20 @@ async def _admins_page(request: web.Request) -> web.Response:
             )
         cred = creds_map.get(a["telegram_id"])
         if cred:
-            web_login = f"@{_esc(cred['username'])} <span class='muted'>(set {_esc(str(cred.get('updated_at',''))[:10])})</span>"
+            web_status   = f"@{_esc(cred['username'])} <span class='muted'>(set {_esc(str(cred.get('updated_at',''))[:10])})</span>"
+            default_user = cred["username"]
         else:
-            web_login = "<span class='muted'>Not set — /webpass</span>"
+            web_status   = "<span class='muted'>Not set</span>"
+            default_user = f"id{a['telegram_id']}"
+        web_login = (
+            f"{web_status}<br>"
+            f"<form method=post action=/admins/webpass class='inline'>"
+            f"<input type=hidden name=telegram_id value='{a['telegram_id']}'>"
+            f"<input type=text name=username value='{_esc(default_user)}' required> "
+            f"<input type=password name=password placeholder='new pass' minlength=6> "
+            f"<button class='btn btn-purple'>Set</button>"
+            f"</form>"
+        )
         arows.append(
             "<tr>"
             f"<td>{tag}</td>"
@@ -927,6 +952,35 @@ async def _admins_remove(request: web.Request) -> web.Response:
     raise web.HTTPFound("/admins")
 
 
+async def _admins_set_webpass(request: web.Request) -> web.Response:
+    """Owner sets/changes any admin's web panel login directly (no /webpass needed)."""
+    _require_owner(request)
+
+    data     = await request.post()
+    raw_id   = (data.get("telegram_id") or "").strip()
+    username = (data.get("username") or "").strip().lstrip("@")
+    password = data.get("password") or ""
+
+    if not raw_id.lstrip("-").isdigit() or not username:
+        raise web.HTTPFound("/admins?err=invalid")
+
+    target_id = int(raw_id)
+    if not is_owner(target_id) and target_id not in get_admin_ids():
+        raise web.HTTPFound("/admins?err=invalid")
+
+    if len(password) < 6:
+        raise web.HTTPFound("/admins?err=short")
+
+    password_hash, salt = hash_password(password)
+    try:
+        await set_web_credentials(target_id, username, password_hash, salt)
+    except Exception:
+        raise web.HTTPFound("/admins?err=taken")
+
+    await audit(_actor_ns(request), "webpass", "admin", target_id, f"set by owner for @{username} (via web)")
+    raise web.HTTPFound("/admins?ok=webpass")
+
+
 async def _trusted_add(request: web.Request) -> web.Response:
     _require_owner(request)
 
@@ -1001,6 +1055,7 @@ async def run_web_admin(bot) -> None:
     app.router.add_get("/admins", _admins_page)
     app.router.add_post("/admins/add", _admins_add)
     app.router.add_post("/admins/remove", _admins_remove)
+    app.router.add_post("/admins/webpass", _admins_set_webpass)
     app.router.add_post("/trusted/add", _trusted_add)
     app.router.add_post("/trusted/remove", _trusted_remove)
 
