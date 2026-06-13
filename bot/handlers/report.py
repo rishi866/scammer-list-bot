@@ -23,6 +23,19 @@ TARGET, REASON, PAYMENT, PROOF = range(4)
 
 
 async def report_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    u = update.effective_user
+    self_dup = await scammer_exists(u.id, u.username)
+    if self_dup:
+        await update.message.reply_text(
+            em(
+                f"🚫 <b>You're listed in our scammer database (#{self_dup['id']})</b> "
+                f"and can't submit reports.\n\n"
+                f"If you believe this is a mistake, contact an admin."
+            ),
+            parse_mode="HTML",
+        )
+        return ConversationHandler.END
+
     await update.message.reply_text(
         em(
             "📨 <b>Report a Scammer</b>\n\n"

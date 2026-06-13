@@ -188,6 +188,17 @@ async def on_addid_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
 
     # ── NON-ADMIN ─────────────────────────────────────────────────────────────
+    self_dup = await scammer_exists(uid, update.effective_user.username)
+    if self_dup:
+        await update.message.reply_text(
+            em(
+                f"🚫 <b>You're listed in our scammer database (#{self_dup['id']})</b> "
+                f"and can't submit reports.\n\nIf you believe this is a mistake, contact an admin."
+            ),
+            parse_mode="HTML",
+        )
+        return
+
     chat_type = update.effective_chat.type
 
     if chat_type in ("group", "supergroup"):
@@ -316,6 +327,17 @@ async def on_forward(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
 
     # ── NON-ADMIN FLOW ──────────────────────────────────────────────────────
+    from bot.db import scammer_exists
+    self_dup = await scammer_exists(uid, update.effective_user.username)
+    if self_dup:
+        await msg.reply_text(
+            em(
+                f"🚫 <b>You're listed in our scammer database (#{self_dup['id']})</b> "
+                f"and can't submit reports.\n\nIf you believe this is a mistake, contact an admin."
+            ),
+            parse_mode="HTML",
+        )
+        return
 
     if not fwd_id:
         await msg.reply_text(
