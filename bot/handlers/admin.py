@@ -129,6 +129,20 @@ async def add_target(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         context.user_data.clear()
         return ConversationHandler.END
 
+    # Don't let an admin add someone who's already on the scammer list
+    dup = await scammer_exists(
+        context.user_data.get("add_target_id"),
+        context.user_data.get("add_target_uname"),
+    )
+    if dup:
+        uname_d = f"@{dup.get('username')}" if dup.get("username") else "—"
+        await update.message.reply_text(
+            em(f"⚠️ Already listed as <b>#{dup['id']}</b> ({uname_d})."),
+            parse_mode="HTML",
+        )
+        context.user_data.clear()
+        return ConversationHandler.END
+
     return ADD_NAME
 
 
