@@ -87,7 +87,7 @@ async def run() -> None:
     except Exception as e:
         logger.warning("emoji_fx load failed (non-fatal): %s", e)
 
-    req = HTTPXRequest(connect_timeout=10, read_timeout=15, write_timeout=20, pool_timeout=15)
+    req = HTTPXRequest(connect_timeout=10, read_timeout=35, write_timeout=20, pool_timeout=15)
     app = Application.builder().token(BOT_TOKEN).request(req).build()
 
     # ── Force-join gate (group=-1 → runs before EVERYTHING else) ──────────────
