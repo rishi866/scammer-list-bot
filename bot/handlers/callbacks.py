@@ -123,14 +123,10 @@ async def _approve(
         await update_report_status(report_id, "rejected")
 
         rejecter = f"@{query.from_user.username}" if query.from_user.username else str(query.from_user.id)
-        suffix   = em(f"\n\nℹ️ <b>Auto-rejected — duplicate</b> of Scammer #{dup['id']} (already listed)")
         try:
-            if query.message.photo:
-                await query.edit_message_caption((query.message.caption or "") + suffix, parse_mode="HTML")
-            else:
-                await query.edit_message_text((query.message.text or "") + suffix, parse_mode="HTML")
+            await query.message.delete()
         except Exception as exc:
-            logger.warning("Could not edit admin message: %s", exc)
+            logger.warning("Could not delete admin message: %s", exc)
 
         await _broadcast_resolution(
             context,
@@ -232,22 +228,11 @@ async def _approve(
                 pass
 
     approver  = f"@{query.from_user.username}" if query.from_user.username else str(query.from_user.id)
-    suffix    = em(f"\n\n{sev_icon} <b>Approved ({severity})</b> by {approver} → Scammer #{scammer_id}")
 
-    # The original message may be a photo (when proof was sent) — handle both
     try:
-        if query.message.photo:
-            await query.edit_message_caption(
-                (query.message.caption or "") + suffix,
-                parse_mode="HTML",
-            )
-        else:
-            await query.edit_message_text(
-                (query.message.text or "") + suffix,
-                parse_mode="HTML",
-            )
+        await query.message.delete()
     except Exception as exc:
-        logger.warning("Could not edit admin message: %s", exc)
+        logger.warning("Could not delete admin message: %s", exc)
 
     # Let the OTHER admins know it's handled + who did it
     await _broadcast_resolution(
@@ -281,21 +266,11 @@ async def _reject(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update_report_status(report_id, "rejected")
 
     rejecter = f"@{query.from_user.username}" if query.from_user.username else str(query.from_user.id)
-    suffix   = em(f"\n\n❌ <b>Rejected</b> by {rejecter}")
 
     try:
-        if query.message.photo:
-            await query.edit_message_caption(
-                (query.message.caption or "") + suffix,
-                parse_mode="HTML",
-            )
-        else:
-            await query.edit_message_text(
-                (query.message.text or "") + suffix,
-                parse_mode="HTML",
-            )
+        await query.message.delete()
     except Exception as exc:
-        logger.warning("Could not edit admin message: %s", exc)
+        logger.warning("Could not delete admin message: %s", exc)
 
     # Let the OTHER admins know it's handled + who did it
     await _broadcast_resolution(
