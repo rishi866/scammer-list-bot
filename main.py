@@ -20,6 +20,7 @@ from telegram.ext import (
     ChatMemberHandler, MessageHandler, filters,
 )
 from telegram.request import HTTPXRequest
+from telegram.error import TimedOut, NetworkError
 
 from bot.db import init_db, cleanup_duplicate_pending_reports
 from bot.services import emoji_fx
@@ -189,7 +190,18 @@ async def run() -> None:
         BotCommand("webpass",       "Set your web panel password (admin)"),
     ]
 
-    await app.initialize()
+    for _attempt in range(10):
+        try:
+            await app.initialize()
+            break
+        except (TimedOut, NetworkError) as e:
+            wait = min(10 * (2 ** _attempt), 120)
+            logger.warning("Telegram init failed (attempt %d): %s — retry in %ds", _attempt + 1, e, wait)
+            await asyncio.sleep(wait)
+    else:
+        logger.error("Gave up connecting to Telegram after 10 attempts — exiting.")
+        return
+
     await app.start()
     try:
         await app.bot.set_my_commands(group_cmds,   scope=BotCommandScopeAllGroupChats())
