@@ -88,7 +88,11 @@ async def run() -> None:
     except Exception as e:
         logger.warning("emoji_fx load failed (non-fatal): %s", e)
 
-    req = HTTPXRequest(connect_timeout=10, read_timeout=35, write_timeout=20, pool_timeout=15)
+    proxy_url = os.getenv("TELEGRAM_PROXY_URL") or None
+    req = HTTPXRequest(
+        connect_timeout=10, read_timeout=35, write_timeout=20, pool_timeout=15,
+        proxy=proxy_url,
+    )
     app = Application.builder().token(BOT_TOKEN).request(req).build()
 
     # ── Force-join gate (group=-1 → runs before EVERYTHING else) ──────────────

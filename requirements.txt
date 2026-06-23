@@ -1,7 +1,7 @@
 python-telegram-bot==21.10
 asyncpg==0.30.0
 python-dotenv==1.0.1
-httpx==0.27.2
+httpx[socks]==0.27.2
 
 # Web admin panel (bot/services/web_admin.py)
 aiohttp==3.10.11
