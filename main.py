@@ -93,7 +93,20 @@ async def run() -> None:
         connect_timeout=10, read_timeout=35, write_timeout=20, pool_timeout=15,
         proxy=proxy_url,
     )
-    app = Application.builder().token(BOT_TOKEN).request(req).build()
+    # PTB builds a SEPARATE (proxy-less by default) request object for
+    # getUpdates unless explicitly given one — without this, polling tries a
+    # direct connection even when proxy_url is set above.
+    get_updates_req = HTTPXRequest(
+        connect_timeout=10, read_timeout=35, write_timeout=20, pool_timeout=15,
+        proxy=proxy_url,
+    )
+    app = (
+        Application.builder()
+        .token(BOT_TOKEN)
+        .request(req)
+        .get_updates_request(get_updates_req)
+        .build()
+    )
 
     # ── Force-join gate (group=-1 → runs before EVERYTHING else) ──────────────
     # No-op until an admin runs /addchannel. See bot/handlers/force_join.py
