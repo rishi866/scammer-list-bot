@@ -4,6 +4,7 @@ Pages:
   /            dashboard (counts, admins, trusted reporters, recent actions)
   /pending     pending reports — approve (high/medium/low) or reject
   /scammers    scammer list — edit fields, remove, or add a new entry
+  /groups      groups the bot is currently in / was removed from
   /admins      manage admins + trusted reporters (owner only)
 
 Every action here mirrors the matching bot command (/approve, /reject, /edit,
@@ -54,7 +55,7 @@ from bot.db import (
     update_scammer_fields, remove_scammer, EDITABLE_FIELDS,
     add_trusted_reporter, remove_trusted_reporter,
     get_web_credentials_by_username, list_web_credentials, delete_web_credentials,
-    set_web_credentials,
+    set_web_credentials, list_all_bot_groups,
 )
 from bot.services.admins import (
     list_all_admins, add_admin, remove_admin, is_owner, owner_id,
@@ -155,6 +156,7 @@ _NAV = [
     ("/",         "📊 Dashboard"),
     ("/pending",  "📨 Pending"),
     ("/scammers", "🚫 Scammers"),
+    ("/groups",   "💬 Groups"),
     ("/admins",   "👥 Admins"),
 ]
 
@@ -925,6 +927,49 @@ async def _scammers_add_post(request: web.Request) -> web.Response:
     raise web.HTTPFound("/scammers")
 
 
+# ── Groups the bot is in ────────────────────────────────────────────────────
+
+async def _groups_page(request: web.Request) -> web.Response:
+    groups = await list_all_bot_groups()
+    active = [g for g in groups if g.get("active")]
+    left   = [g for g in groups if not g.get("active")]
+
+    def _rows_for(rows: list[dict], active_status: bool) -> str:
+        if not rows:
+            return "<tr><td colspan=3 class='muted'>None.</td></tr>"
+        out = []
+        for g in rows:
+            badge = (
+                "<span class='badge' style='background:#16a34a'>Active</span>" if active_status
+                else "<span class='badge' style='background:#475569'>Removed</span>"
+            )
+            title = _esc(g.get("title") or "—")
+            out.append(
+                "<tr>"
+                f"<td>{badge}</td>"
+                f"<td>{title}</td>"
+                f"<td class='mono'>{g['group_id']}</td>"
+                f"<td>{_esc(str(g.get('added_at',''))[:16])}</td>"
+                "</tr>"
+            )
+        return "".join(out)
+
+    table = (
+        "<table><tr><th>Status</th><th>Title</th><th>Group ID</th><th>Added</th></tr>"
+        + _rows_for(active, True)
+        + _rows_for(left, False)
+        + "</table>"
+    )
+
+    body = (
+        _flash(request)
+        + "<h1>💬 Groups</h1>"
+        + f"<p class='sub'>{len(active)} active &middot; {len(left)} removed</p>"
+        + table
+    )
+    return web.Response(text=_layout("Groups", "/groups", body, web_user=request["web_user"]), content_type="text/html")
+
+
 # ── Admins & trusted reporters (owner only) ─────────────────────────────────
 
 async def _admins_page(request: web.Request) -> web.Response:
@@ -1161,6 +1206,8 @@ async def run_web_admin(bot) -> None:
     app.router.add_get("/scammers/{id}/edit", _scammers_edit_get)
     app.router.add_post("/scammers/{id}/edit", _scammers_edit_post)
     app.router.add_post("/scammers/remove", _scammers_remove)
+
+    app.router.add_get("/groups", _groups_page)
 
     app.router.add_get("/admins", _admins_page)
     app.router.add_post("/admins/add", _admins_add)

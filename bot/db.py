@@ -561,6 +561,13 @@ async def list_active_bot_groups() -> list[dict]:
     return _rows(await pool.fetch("SELECT * FROM bot_groups WHERE active = TRUE"))
 
 
+async def list_all_bot_groups() -> list[dict]:
+    pool = await _get_pool()
+    return _rows(await pool.fetch(
+        "SELECT * FROM bot_groups ORDER BY active DESC, added_at DESC"
+    ))
+
+
 # ── Trusted Reporters ─────────────────────────────────────────────────────────
 
 async def add_trusted_reporter(user_id: int, username: Optional[str], added_by: int) -> None:
