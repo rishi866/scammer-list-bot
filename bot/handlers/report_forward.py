@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 import os
 
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, MessageOriginChannel
 from telegram.ext import ContextTypes, MessageHandler, CommandHandler, filters
 
 from bot.services.admins import (
@@ -635,9 +635,27 @@ async def _notify_admins(context, report_id, tg_id, uname, name, reason,
 # ── Group: forward check ─────────────────────────────────────────────────────
 
 async def on_forward_group(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Forward in group → check DB, show result or suggest how to report."""
+    """Forward in group → check DB, show result or suggest how to report.
+
+    Channel-origin forwards (the classic way people self-promote — forward a
+    post from their own channel into the group) have no sender_user to look
+    up, so they always used to fall through to a useless "could not identify
+    sender" reply while the promotional post stayed visible. Auto-delete
+    those instead; admins are exempt.
+    """
     msg = update.message
     uid = update.effective_user.id
+
+    if isinstance(msg.forward_origin, MessageOriginChannel) and uid not in _admin_ids():
+        try:
+            await msg.delete()
+            logger.info(
+                "Deleted channel-forward (self-promo) in group %s from user %s",
+                update.effective_chat.id, uid,
+            )
+        except Exception as exc:
+            logger.debug("Could not delete channel-forward: %s", exc)
+        return
 
     fwd_id, fwd_uname, fwd_name = _extract_fwd_user(msg)
 
